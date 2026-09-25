@@ -109,3 +109,42 @@ export interface SystemHealthReport {
   alpacaTrading: ComponentHealth;
   jev: ComponentHealth;
 }
+
+export interface SimulationPosition {
+  symbol: string;
+  quantity: number;
+  averageEntryPrice: number;
+  currentPrice: number;
+  marketValue: number;
+  unrealizedPnL: number;
+  unrealizedPnLPercent: number;
+}
+
+export interface SimulationTrade {
+  id: string;
+  timestamp: number;
+  time: string;
+  symbol: string;
+  side: 'BUY' | 'SELL';
+  price: number;
+  quantity: number;
+  usdtValue: number;
+  fee: number;
+  realizedPnL?: number;
+  jevConfidence?: number;
+  source: 'MANUAL' | 'JEV_BOT';
+  status: 'FILLED' | 'REJECTED';
+  notes?: string;
+}
+
+export interface SimulationWallet {
+  version: number;
+  initialBalance: number;
+  cash: number;
+  equity: number;
+  realizedPnL: number;
+  positions: SimulationPosition[];
+  trades: SimulationTrade[];
+  createdAt: number;
+  updatedAt: number;
+}

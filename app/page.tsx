@@ -23,7 +23,25 @@ import {
   Bot,
   Activity
 } from 'lucide-react';
-import { ExchangeType, MarketData, AccountInfo, AIAnalysisResult, TradeOrder } from '@/types/trading';
+import {
+  ExchangeType,
+  MarketData,
+  AccountInfo,
+  AIAnalysisResult,
+  TradeOrder,
+  SimulationWallet,
+  SimulationPosition,
+  SimulationTrade,
+} from '@/types/trading';
+import {
+  loadSimulationWallet,
+  saveSimulationWallet,
+  recalculateWallet,
+  executeSimulationBuy,
+  executeSimulationSell,
+  resetSimulationWallet,
+  SIMULATION_WALLET_STORAGE_KEY,
+} from '@/lib/simulationWallet';
 
 const NASDAQ_SYMBOLS = ['AAPL', 'NVDA', 'MSFT', 'TSLA', 'QQQ', 'AMZN'];
 const BINANCE_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
@@ -39,8 +57,26 @@ export default function TradingDashboard() {
   const [isLoadingMarket, setIsLoadingMarket] = useState<boolean>(true);
   const [marketError, setMarketError] = useState<string | null>(null);
 
-  // Trading Account Data (Separated - Testnet / Paper only)
+  // Virtual Simulation Wallet (10.00 USDT Initial State & Persistence)
+  const [simWallet, setSimWallet] = useState<SimulationWallet>(() => {
+    return {
+      version: 1,
+      initialBalance: 10.0,
+      cash: 10.0,
+      equity: 10.0,
+      realizedPnL: 0,
+      positions: [],
+      trades: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+  });
+  const [symbolPrices, setSymbolPrices] = useState<Record<string, number>>({});
+  const [showResetConfirm, setShowResetConfirm] = useState<boolean>(false);
+
+  // Trading Account Data (For Nasdaq Alpaca Paper)
   const [account, setAccount] = useState<AccountInfo | null>(null);
+  const [initialEquity, setInitialEquity] = useState<number | null>(null);
   const [orders, setOrders] = useState<TradeOrder[]>([]);
   const [activeTableTab, setActiveTableTab] = useState<'positions' | 'orders'>('positions');
 
@@ -50,14 +86,20 @@ export default function TradingDashboard() {
   const [aiAnalysis, setAiAnalysis] = useState<AIAnalysisResult | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
 
-  // Continuous Auto-Trading Bot Loop
+  // Continuous Auto-Trading Bot Loop & JEV Settings
   const [isBotRunning, setIsBotRunning] = useState<boolean>(false);
   const [botIntervalSec, setBotIntervalSec] = useState<number>(15);
+  const [botMinConfidence, setBotMinConfidence] = useState<number>(70);
+  const [botTradeSizePct, setBotTradeSizePct] = useState<number>(10);
+  const [botCooldownSec, setBotCooldownSec] = useState<number>(30);
   const [botCountdown, setBotCountdown] = useState<number>(15);
-  const [initialEquity, setInitialEquity] = useState<number | null>(null);
   const [botLogs, setBotLogs] = useState<{ time: string; msg: string; type: 'info' | 'buy' | 'sell' | 'hold' }[]>([]);
+  const lastTradeTimeRef = React.useRef<number>(0);
+  const simWalletRef = React.useRef<SimulationWallet>(simWallet);
+  simWalletRef.current = simWallet;
 
-  // Manual Trading
+  // Manual Trading (Default mode: USDT input)
+  const [orderAmountUsdt, setOrderAmountUsdt] = useState<string>('1.00');
   const [orderQuantity, setOrderQuantity] = useState<string>('0.00003');
   const [isTrading, setIsTrading] = useState<boolean>(false);
   const [tradeNotice, setTradeNotice] = useState<string | null>(null);
@@ -83,6 +125,10 @@ export default function TradingDashboard() {
       setAlpacaSecret(localStorage.getItem('alpaca_api_secret') || '');
       setBinanceKey(localStorage.getItem('binance_api_key') || '');
       setBinanceSecret(localStorage.getItem('binance_api_secret') || '');
+
+      // Load simulation wallet from localStorage
+      const loaded = loadSimulationWallet();
+      setSimWallet(loaded);
     }
   }, []);
 
@@ -126,6 +172,13 @@ export default function TradingDashboard() {
         const data: MarketData = await res.json();
         setMarketData(data);
         setMarketError(null);
+        if (data.price > 0) {
+          setSymbolPrices((prev) => {
+            const next = { ...prev, [data.symbol]: data.price };
+            return next;
+          });
+          setSimWallet((prev) => recalculateWallet(prev, { [data.symbol]: data.price }));
+        }
         return data;
       } else {
         const err = await res.json().catch(() => ({}));
@@ -180,21 +233,17 @@ export default function TradingDashboard() {
     setInitialEquity(null);
   };
 
-  const handleResetBinanceBalance = async () => {
-    try {
-      const res = await fetch('/api/binance/account', { method: 'POST' });
-      if (res.ok) {
-        const data = await res.json();
-        setAccount(data);
-        setInitialEquity(10.0);
-        setOrders([]);
-        setTradeNotice('Binance bakiyesi başarıyla 10.00 USDT olarak sıfırlandı.');
-        setTimeout(() => setTradeNotice(null), 4000);
-      }
-    } catch (err) {
-      console.error(err);
-    }
+  // Reset Simulation Wallet (Confirmation Modal Triggered)
+  const handleResetSimulation = () => {
+    setIsBotRunning(false);
+    const fresh = resetSimulationWallet();
+    setSimWallet(fresh);
+    setShowResetConfirm(false);
+    setTradeNotice('Simülasyon sıfırlandı. Yeni başlangıç bakiyesi 10.00 USDT.');
+    setTimeout(() => setTradeNotice(null), 4000);
   };
+
+  const handleResetBinanceBalance = handleResetSimulation;
 
   const fetchHealth = async () => {
     try {
@@ -252,12 +301,85 @@ export default function TradingDashboard() {
     return null;
   };
 
-  // Execute Order
+  // Execute Virtual Manual BUY
+  const handleVirtualBuy = (usdtAmountToSpend?: number) => {
+    if (!marketData || marketError || marketData.price <= 0) {
+      setTradeNotice('Market Data Unavailable');
+      setTimeout(() => setTradeNotice(null), 4000);
+      return;
+    }
+
+    const amount = usdtAmountToSpend !== undefined ? usdtAmountToSpend : parseFloat(orderAmountUsdt);
+    if (isNaN(amount) || amount <= 0) {
+      setTradeNotice('Geçerli bir USDT tutarı girin.');
+      setTimeout(() => setTradeNotice(null), 4000);
+      return;
+    }
+
+    const res = executeSimulationBuy(simWallet, marketData.symbol, amount, marketData.price, 'MANUAL');
+    if (res.success && res.trade) {
+      setSimWallet(res.wallet);
+      setTradeNotice(`Manuel ALIM başarılı: ${amount.toFixed(2)} USDT karşılığı ${res.trade.quantity} ${marketData.symbol} alındı.`);
+    } else {
+      setTradeNotice(`ALIM Başarısız: ${res.error || 'İşlem gerçekleştirilemedi.'}`);
+    }
+    setTimeout(() => setTradeNotice(null), 5000);
+  };
+
+  // Execute Virtual Manual SELL
+  const handleVirtualSell = (targetSymbol?: string, targetQty?: number) => {
+    const sym = targetSymbol || symbol;
+    const currentPrice = (sym === marketData?.symbol && marketData ? marketData.price : symbolPrices[sym]) || 0;
+
+    if (!currentPrice || currentPrice <= 0) {
+      setTradeNotice('Market Data Unavailable');
+      setTimeout(() => setTradeNotice(null), 4000);
+      return;
+    }
+
+    const pos = simWallet.positions.find((p) => p.symbol === sym);
+    if (!pos || pos.quantity <= 0) {
+      setTradeNotice(`Satılacak ${sym} pozisyonu bulunamadı. Açığa satış (Short) yapılamaz.`);
+      setTimeout(() => setTradeNotice(null), 5000);
+      return;
+    }
+
+    let qtyToSell = targetQty !== undefined ? targetQty : pos.quantity;
+    if (targetQty === undefined) {
+      const inputAmount = parseFloat(orderAmountUsdt);
+      if (!isNaN(inputAmount) && inputAmount > 0) {
+        const estQty = inputAmount / currentPrice;
+        qtyToSell = Math.min(pos.quantity, estQty);
+      }
+    }
+
+    const res = executeSimulationSell(simWallet, sym, qtyToSell, currentPrice, 'MANUAL');
+    if (res.success && res.trade) {
+      setSimWallet(res.wallet);
+      const pnl = res.trade.realizedPnL || 0;
+      setTradeNotice(`Manuel SATIŞ başarılı: ${res.trade.quantity} ${sym} satıldı. Kar/Zarar: ${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)} USDT`);
+    } else {
+      setTradeNotice(`SATIŞ Başarısız: ${res.error || 'İşlem gerçekleştirilemedi.'}`);
+    }
+    setTimeout(() => setTradeNotice(null), 5000);
+  };
+
+  // Execute Order (Handles both Nasdaq Alpaca & Virtual Binance)
   const handleExecuteOrder = async (side: 'BUY' | 'SELL', qty: number, executedBy: 'AI' | 'MANUAL' = 'MANUAL') => {
+    if (exchange === 'binance') {
+      if (side === 'BUY') {
+        const estUsdt = (marketData?.price || 0) * qty;
+        handleVirtualBuy(estUsdt > 0 ? estUsdt : undefined);
+      } else {
+        handleVirtualSell(marketData?.symbol, qty > 0 ? qty : undefined);
+      }
+      return;
+    }
+
     if (!marketData || qty <= 0) return;
     setIsTrading(true);
     try {
-      const endpoint = exchange === 'nasdaq' ? '/api/nasdaq/trade' : '/api/binance/trade';
+      const endpoint = '/api/nasdaq/trade';
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: {
@@ -291,7 +413,50 @@ export default function TradingDashboard() {
     }
   };
 
-  // Continuous Auto-Trading Bot Loop
+  // Balance Depleted Check: Auto-stop bot if equity <= 0.01 USDT
+  useEffect(() => {
+    if (exchange === 'binance' && simWallet.equity <= 0.01 && isBotRunning) {
+      setIsBotRunning(false);
+      setTradeNotice('SIMULATION BALANCE DEPLETED - Bot otomatik durduruldu.');
+    }
+  }, [exchange, simWallet.equity, isBotRunning]);
+
+  // Background price refresh for all symbols in wallet positions to guarantee 100% real current Binance market data
+  useEffect(() => {
+    if (exchange !== 'binance') return;
+    const pollPositions = async () => {
+      const current = simWalletRef.current;
+      const symbolsToPoll = Array.from(new Set([...BINANCE_SYMBOLS, ...current.positions.map((p) => p.symbol)]));
+      const newPrices: Record<string, number> = {};
+
+      for (const s of symbolsToPoll) {
+        if (s === symbol && marketData && marketData.price > 0) {
+          newPrices[s] = marketData.price;
+        } else {
+          try {
+            const r = await fetch(`/api/binance/market?symbol=${s}&timeframe=1h`);
+            if (r.ok) {
+              const d = await r.json();
+              if (d && d.price > 0) {
+                newPrices[s] = d.price;
+              }
+            }
+          } catch (e) {}
+        }
+      }
+
+      if (Object.keys(newPrices).length > 0) {
+        setSymbolPrices((prev) => ({ ...prev, ...newPrices }));
+        setSimWallet((prev) => recalculateWallet(prev, newPrices));
+      }
+    };
+
+    pollPositions();
+    const timer = setInterval(pollPositions, 10000);
+    return () => clearInterval(timer);
+  }, [exchange, symbol, marketData]);
+
+  // Continuous Auto-Trading Bot Loop (JEV + Virtual Simulation Wallet)
   useEffect(() => {
     if (!isBotRunning) {
       setBotCountdown(botIntervalSec);
@@ -302,21 +467,101 @@ export default function TradingDashboard() {
       setBotCountdown((prev) => {
         if (prev <= 1) {
           (async () => {
+            const currentWallet = simWalletRef.current;
+            if (currentWallet.equity <= 0.01) {
+              setIsBotRunning(false);
+              return;
+            }
+
             const mkt = await fetchMarketData(symbol, timeframe);
-            if (mkt) {
-              const analysis = await runAIAnalysis(mkt);
-              if (analysis) {
-                const now = new Date().toLocaleTimeString();
-                if (analysis.action === 'BUY' && analysis.confidence >= 70) {
-                  setBotLogs((l) => [{ time: now, msg: `${mkt.symbol} -> ALIM Emri (${analysis.suggestedQuantity} adet, %${analysis.confidence} güven)`, type: 'buy' }, ...l.slice(0, 19)]);
-                  await handleExecuteOrder('BUY', analysis.suggestedQuantity, 'AI');
-                } else if (analysis.action === 'SELL' && analysis.confidence >= 70) {
-                  setBotLogs((l) => [{ time: now, msg: `${mkt.symbol} -> SATIŞ Emri (${analysis.suggestedQuantity} adet, %${analysis.confidence} güven)`, type: 'sell' }, ...l.slice(0, 19)]);
-                  await handleExecuteOrder('SELL', analysis.suggestedQuantity, 'AI');
-                } else {
-                  setBotLogs((l) => [{ time: now, msg: `${mkt.symbol} -> BEKLE (Güven: %${analysis.confidence})`, type: 'hold' }, ...l.slice(0, 19)]);
-                }
+            const timeStr = new Date().toLocaleTimeString();
+
+            if (!mkt || mkt.price <= 0) {
+              setBotLogs((l) => [
+                { time: timeStr, msg: `${symbol} | Market Data Unavailable - Bot duraklatıldı.`, type: 'hold' },
+                ...l.slice(0, 29),
+              ]);
+              return;
+            }
+
+            // Check Cooldown (default 30s)
+            const nowMs = Date.now();
+            if (nowMs - lastTradeTimeRef.current < botCooldownSec * 1000) {
+              const remainingCooldown = Math.ceil((botCooldownSec * 1000 - (nowMs - lastTradeTimeRef.current)) / 1000);
+              setBotLogs((l) => [
+                { time: timeStr, msg: `${mkt.symbol} | Fiyat: ${mkt.price.toFixed(2)} | Cooldown aktif (${remainingCooldown}s)`, type: 'hold' },
+                ...l.slice(0, 29),
+              ]);
+              return;
+            }
+
+            const analysis = await runAIAnalysis(mkt);
+            if (!analysis) return;
+
+            const priceFormatted = mkt.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+            if (analysis.action === 'BUY' && analysis.confidence >= botMinConfidence) {
+              const availableCash = currentWallet.cash;
+              const tradeUsdt = parseFloat((availableCash * (botTradeSizePct / 100)).toFixed(2));
+
+              if (tradeUsdt < 0.10 || availableCash < 0.10) {
+                setBotLogs((l) => [
+                  { time: timeStr, msg: `${mkt.symbol} | Fiyat: ${priceFormatted} | JEV: BUY (%${analysis.confidence}) | Status: NO TRADE (Yetersiz bakiye)`, type: 'hold' },
+                  ...l.slice(0, 29),
+                ]);
+                return;
               }
+
+              const buyRes = executeSimulationBuy(currentWallet, mkt.symbol, tradeUsdt, mkt.price, 'JEV_BOT', analysis.confidence);
+              if (buyRes.success && buyRes.trade) {
+                setSimWallet(buyRes.wallet);
+                lastTradeTimeRef.current = Date.now();
+                setBotLogs((l) => [
+                  {
+                    time: timeStr,
+                    msg: `${mkt.symbol} | Fiyat: ${priceFormatted} | JEV: BUY | Güven: %${analysis.confidence} | Emir: ${tradeUsdt.toFixed(2)} USDT | Miktar: ${buyRes.trade?.quantity} | Status: FILLED`,
+                    type: 'buy',
+                  },
+                  ...l.slice(0, 29),
+                ]);
+              }
+            } else if (analysis.action === 'SELL' && analysis.confidence >= botMinConfidence) {
+              const openPos = currentWallet.positions.find((p) => p.symbol === mkt.symbol);
+              if (!openPos || openPos.quantity <= 0) {
+                setBotLogs((l) => [
+                  {
+                    time: timeStr,
+                    msg: `${mkt.symbol} | Fiyat: ${priceFormatted} | JEV: SELL | Güven: %${analysis.confidence} | Status: NO POSITION TO SELL`,
+                    type: 'hold',
+                  },
+                  ...l.slice(0, 29),
+                ]);
+                return;
+              }
+
+              const sellRes = executeSimulationSell(currentWallet, mkt.symbol, openPos.quantity, mkt.price, 'JEV_BOT', analysis.confidence);
+              if (sellRes.success && sellRes.trade) {
+                setSimWallet(sellRes.wallet);
+                lastTradeTimeRef.current = Date.now();
+                const pnl = sellRes.trade.realizedPnL || 0;
+                setBotLogs((l) => [
+                  {
+                    time: timeStr,
+                    msg: `${mkt.symbol} | Fiyat: ${priceFormatted} | JEV: SELL | Güven: %${analysis.confidence} | Realized P&L: ${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)} USDT | Status: FILLED`,
+                    type: 'sell',
+                  },
+                  ...l.slice(0, 29),
+                ]);
+              }
+            } else {
+              setBotLogs((l) => [
+                {
+                  time: timeStr,
+                  msg: `${mkt.symbol} | Fiyat: ${priceFormatted} | JEV: ${analysis.action} | Güven: %${analysis.confidence} | Status: NO TRADE`,
+                  type: 'hold',
+                },
+                ...l.slice(0, 29),
+              ]);
             }
           })();
           return botIntervalSec;
@@ -326,20 +571,20 @@ export default function TradingDashboard() {
     }, 1000);
 
     return () => clearInterval(intervalTimer);
-  }, [isBotRunning, botIntervalSec, symbol, timeframe, fetchMarketData]);
+  }, [isBotRunning, botIntervalSec, botMinConfidence, botTradeSizePct, botCooldownSec, symbol, timeframe, fetchMarketData]);
 
   const currencySymbol = exchange === 'nasdaq' ? '$' : 'USDT ';
   const currentSymbols = exchange === 'nasdaq' ? NASDAQ_SYMBOLS : BINANCE_SYMBOLS;
 
-  // Realized Net Profit Calculation
-  const currentEquity = account?.equity || 0;
-  const netPnL = initialEquity ? currentEquity - initialEquity : 0;
-  const netPnLPct = initialEquity && initialEquity > 0 ? (netPnL / initialEquity) * 100 : 0;
+  // Financial Calculations (100% Real Binance Virtual Simulation vs Nasdaq Paper)
+  const currentEquity = exchange === 'binance' ? simWallet.equity : (account?.equity || 0);
+  const currentCash = exchange === 'binance' ? simWallet.cash : (account?.buyingPower || 0);
+  const initialBal = exchange === 'binance' ? simWallet.initialBalance : (initialEquity || 100000);
+  const netPnL = currentEquity - initialBal;
+  const netPnLPct = initialBal > 0 ? (netPnL / initialBal) * 100 : 0;
 
-  const isTradingDisabled =
-    account?.status === 'API_KEY_INVALID' ||
-    account?.status === 'RESTRICTED_LOCATION' ||
-    marketData === null;
+  const isMarketUnavailable = !marketData || marketError !== null || marketData.price <= 0;
+  const isTradingDisabled = isMarketUnavailable || (exchange === 'nasdaq' && (account?.status === 'API_KEY_INVALID' || account?.status === 'RESTRICTED_LOCATION'));
 
   return (
     <div className="min-h-screen bg-[#0b0e14] text-slate-100 flex flex-col font-sans selection:bg-indigo-500/30">
@@ -426,80 +671,76 @@ export default function TradingDashboard() {
         {/* Left Column (8 cols): Market & Portfolio */}
         <div className="lg:col-span-8 flex flex-col gap-6">
 
-          {/* Account Metrics Bar - Clearly Labeled Testnet / Paper */}
+          {/* Account Metrics Bar - Simulation Wallet & Nasdaq Paper */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {/* Card 1: SIMULATION EQUITY (with Reset Confirmation) */}
             <div className="bg-[#121824] border border-slate-800/80 rounded-xl p-4 flex flex-col justify-between">
               <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
                 <span className="font-semibold text-[11px] text-slate-300">
-                  {exchange === 'binance' ? 'BINANCE TESTNET EQUITY' : 'ALPACA PAPER EQUITY'}
+                  {exchange === 'binance' ? 'SIMULATION EQUITY' : 'ALPACA PAPER EQUITY'}
                 </span>
-                <Wallet className="w-3.5 h-3.5 text-blue-400" />
+                <div className="flex items-center gap-1.5">
+                  {exchange === 'binance' && (
+                    <button
+                      onClick={() => setShowResetConfirm(true)}
+                      title="Simülasyonu Sıfırla"
+                      className="text-[10px] text-cyan-400 hover:text-cyan-300 bg-cyan-950/60 border border-cyan-800/60 px-2 py-0.5 rounded font-normal transition"
+                    >
+                      Sıfırla
+                    </button>
+                  )}
+                  <Wallet className="w-3.5 h-3.5 text-blue-400" />
+                </div>
               </div>
               <div className="text-xl font-bold tracking-tight text-white flex items-baseline justify-between">
-                {account?.status === 'RESTRICTED_LOCATION' ? (
-                  <span className="text-sm font-semibold text-amber-400">UNAVAILABLE</span>
-                ) : (
-                  <span>{account ? `${currencySymbol}${account.equity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '...'}</span>
-                )}
-                {exchange === 'binance' && account?.status !== 'RESTRICTED_LOCATION' && (
-                  <button
-                    onClick={handleResetBinanceBalance}
-                    title="Bakiyeyi $10'a Sıfırla"
-                    className="text-[10px] text-cyan-400 hover:text-cyan-300 bg-cyan-950/60 border border-cyan-800/60 px-2 py-0.5 rounded font-normal"
-                  >
-                    10$&apos;a Sıfırla
-                  </button>
-                )}
+                <span>
+                  {currencySymbol}
+                  {currentEquity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
               </div>
               <div className="text-[11px] mt-1 flex items-center gap-1">
-                {account?.status === 'RESTRICTED_LOCATION' ? (
-                  <span className="text-amber-400 font-medium">Binance Testnet trading unavailable</span>
-                ) : (
-                  <>
-                    <ShieldCheck className="w-3 h-3 text-emerald-400" />
-                    <span className="text-emerald-400">{account?.isDemo ? 'Sanal Sandbox Modu' : 'Canlı Testnet'}</span>
-                  </>
-                )}
+                <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                <span className="text-emerald-400">
+                  {exchange === 'binance' ? 'Sanal Simülasyon Cüzdanı' : (account?.isDemo ? 'Sanal Sandbox Modu' : 'Canlı Testnet')}
+                </span>
               </div>
             </div>
 
+            {/* Card 2: AVAILABLE CASH */}
             <div className="bg-[#121824] border border-slate-800/80 rounded-xl p-4 flex flex-col justify-between">
               <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
                 <span className="font-semibold text-[11px] text-slate-300">
-                  {exchange === 'binance' ? 'TESTNET BUYING POWER' : 'PAPER BUYING POWER'}
+                  {exchange === 'binance' ? 'AVAILABLE CASH' : 'PAPER BUYING POWER'}
                 </span>
                 <DollarSign className="w-3.5 h-3.5 text-emerald-400" />
               </div>
               <div className="text-xl font-bold tracking-tight text-white">
-                {account?.status === 'RESTRICTED_LOCATION' ? (
-                  <span className="text-sm font-semibold text-amber-400">UNAVAILABLE</span>
-                ) : account ? (
-                  `${currencySymbol}${account.buyingPower.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                ) : (
-                  '...'
-                )}
+                {currencySymbol}
+                {currentCash.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </div>
               <div className="text-[11px] text-slate-400 mt-1">
-                {account?.status === 'RESTRICTED_LOCATION' ? 'Kullanılamıyor (Bölgesel Kısıtlama)' : 'Kullanılabilir Sanal Nakit'}
+                Kullanılabilir Sanal Nakit
               </div>
             </div>
 
+            {/* Card 3: NET P&L */}
             <div className="bg-[#121824] border border-slate-800/80 rounded-xl p-4 flex flex-col justify-between">
               <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-                <span>Net Kar / Zarar (Bot PnL)</span>
+                <span className="font-semibold text-[11px] text-slate-300">NET P&L</span>
                 <BarChart3 className="w-3.5 h-3.5 text-cyan-400" />
               </div>
               <div className={`text-xl font-bold tracking-tight ${netPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                 {netPnL >= 0 ? '+' : ''}{currencySymbol}{netPnL.toFixed(2)} ({netPnL >= 0 ? '+' : ''}{netPnLPct.toFixed(2)}%)
               </div>
               <div className="text-[11px] text-slate-400 mt-1">
-                {initialEquity ? `Başlangıç: ${currencySymbol}${initialEquity.toFixed(2)}` : 'Hesaplanıyor...'}
+                Başlangıç: {currencySymbol}{initialBal.toFixed(2)}
               </div>
             </div>
 
+            {/* Card 4: AUTOMATIC BOT STATUS */}
             <div className="bg-[#121824] border border-slate-800/80 rounded-xl p-4 flex flex-col justify-between">
               <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-                <span>Otomatik Bot Durumu</span>
+                <span className="font-semibold text-[11px] text-slate-300">AUTOMATIC BOT STATUS</span>
                 <Bot className="w-3.5 h-3.5 text-amber-400" />
               </div>
               <div className="flex items-center gap-2">
@@ -508,10 +749,35 @@ export default function TradingDashboard() {
                 </span>
               </div>
               <div className="text-[11px] text-slate-400 mt-1">
-                {orders.filter(o => o.executedBy === 'AI').length} AI Emri Verildi
+                {exchange === 'binance'
+                  ? `${simWallet.trades.filter((t) => t.source === 'JEV_BOT').length} JEV Bot Emri Verildi`
+                  : `${orders.filter((o) => o.executedBy === 'AI').length} AI Emri Verildi`}
               </div>
             </div>
           </div>
+
+          {/* SIMULATION BALANCE DEPLETED ALERT (Auto-stop & 10 USDT Reset) */}
+          {exchange === 'binance' && simWallet.equity <= 0.01 && (
+            <div className="p-4 rounded-xl bg-rose-950/70 border border-rose-500/60 text-white flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xl">
+              <div className="flex items-center gap-3">
+                <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0" />
+                <div>
+                  <div className="font-bold text-sm tracking-wide text-rose-200">
+                    SIMULATION BALANCE DEPLETED
+                  </div>
+                  <div className="text-xs text-rose-300/80">
+                    Sanal bakiye tükendi. Otomatik al-sat durduruldu.
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={handleResetSimulation}
+                className="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition shadow-lg shadow-rose-600/30 whitespace-nowrap"
+              >
+                10 USDT İLE YENİDEN BAŞLAT
+              </button>
+            </div>
+          )}
 
           {/* Real Market Price Display Card */}
           <div className="bg-[#121824] border border-slate-800/80 rounded-2xl p-5 shadow-lg flex flex-col gap-5">
@@ -709,7 +975,7 @@ export default function TradingDashboard() {
                       : 'border-transparent text-slate-400 hover:text-slate-200'
                   }`}
                 >
-                  Açık Pozisyonlar ({account?.positions.length || 0})
+                  Açık Pozisyonlar ({exchange === 'binance' ? simWallet.positions.length : (account?.positions.length || 0)})
                 </button>
                 <button
                   onClick={() => setActiveTableTab('orders')}
@@ -719,63 +985,124 @@ export default function TradingDashboard() {
                       : 'border-transparent text-slate-400 hover:text-slate-200'
                   }`}
                 >
-                  İşlem Geçmişi ({orders.length})
+                  İşlem Geçmişi ({exchange === 'binance' ? simWallet.trades.length : orders.length})
                 </button>
               </div>
               <span className="text-[11px] text-slate-400">
-                {account?.statusMessage || 'Bağlı'}
+                {exchange === 'binance' ? 'Gerçek Piyasa Fiyatları ile Senkronize' : (account?.statusMessage || 'Bağlı')}
               </span>
             </div>
 
             {/* Positions Table */}
             {activeTableTab === 'positions' && (
               <div className="overflow-x-auto mt-3">
-                {account?.positions && account.positions.length > 0 ? (
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr className="text-slate-400 border-b border-slate-800/60 pb-2">
-                        <th className="py-2.5 font-medium">Varlık</th>
-                        <th className="py-2.5 font-medium">Miktar</th>
-                        <th className="py-2.5 font-medium">Giriş Fiyatı</th>
-                        <th className="py-2.5 font-medium">Gerçek Piyasa Fiyatı</th>
-                        <th className="py-2.5 font-medium">Piyasa Değeri</th>
-                        <th className="py-2.5 font-medium">Kar / Zarar (P&L)</th>
-                        <th className="py-2.5 font-medium text-right">Aksiyon</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-800/50">
-                      {account.positions.map((pos) => {
-                        const isProfitable = pos.unrealizedPl >= 0;
-                        return (
-                          <tr key={pos.symbol} className="hover:bg-slate-800/30 transition">
-                            <td className="py-3 font-semibold text-white">{pos.symbol}</td>
-                            <td className="py-3 text-slate-300 font-mono">{pos.quantity}</td>
-                            <td className="py-3 text-slate-300">{currencySymbol}{pos.entryPrice.toFixed(2)}</td>
-                            <td className="py-3 text-emerald-400 font-mono">{currencySymbol}{pos.currentPrice.toFixed(2)}</td>
-                            <td className="py-3 text-slate-300">{currencySymbol}{pos.marketValue.toFixed(2)}</td>
-                            <td className="py-3 font-medium">
-                              <span className={isProfitable ? 'text-emerald-400' : 'text-rose-400'}>
-                                {isProfitable ? '+' : ''}{currencySymbol}{pos.unrealizedPl.toFixed(2)} ({isProfitable ? '+' : ''}{pos.unrealizedPlPercent.toFixed(2)}%)
-                              </span>
-                            </td>
-                            <td className="py-3 text-right">
-                              <button
-                                onClick={() => handleExecuteOrder('SELL', pos.quantity, 'MANUAL')}
-                                disabled={isTradingDisabled}
-                                className="px-2.5 py-1 rounded bg-rose-600/20 border border-rose-500/30 text-rose-300 text-[11px] font-semibold hover:bg-rose-600/30 transition disabled:opacity-40"
-                              >
-                                Kapat / Sat
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                {exchange === 'binance' ? (
+                  simWallet.positions.length > 0 ? (
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="text-slate-400 border-b border-slate-800/60 pb-2">
+                          <th className="py-2.5 font-medium">Symbol</th>
+                          <th className="py-2.5 font-medium">Quantity</th>
+                          <th className="py-2.5 font-medium">Average Entry</th>
+                          <th className="py-2.5 font-medium">Real Current Price</th>
+                          <th className="py-2.5 font-medium">Market Value</th>
+                          <th className="py-2.5 font-medium">Unrealized P&L</th>
+                          <th className="py-2.5 font-medium">P&L %</th>
+                          <th className="py-2.5 font-medium text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/50">
+                        {simWallet.positions.map((pos) => {
+                          const livePrice = (pos.symbol === symbol && marketData ? marketData.price : symbolPrices[pos.symbol]) || pos.currentPrice || pos.averageEntryPrice;
+                          const mktVal = pos.quantity * livePrice;
+                          const uPnL = (livePrice - pos.averageEntryPrice) * pos.quantity;
+                          const uPnLPct = pos.averageEntryPrice > 0 ? ((livePrice - pos.averageEntryPrice) / pos.averageEntryPrice) * 100 : 0;
+                          const isProfitable = uPnL >= 0;
+
+                          return (
+                            <tr key={pos.symbol} className="hover:bg-slate-800/30 transition">
+                              <td className="py-3 font-semibold text-white">{pos.symbol}</td>
+                              <td className="py-3 text-slate-300 font-mono">{pos.quantity}</td>
+                              <td className="py-3 text-slate-300">USDT {pos.averageEntryPrice.toFixed(2)}</td>
+                              <td className="py-3 text-emerald-400 font-mono">USDT {livePrice.toFixed(2)}</td>
+                              <td className="py-3 text-slate-300">USDT {mktVal.toFixed(2)}</td>
+                              <td className="py-3 font-medium">
+                                <span className={isProfitable ? 'text-emerald-400' : 'text-rose-400'}>
+                                  {isProfitable ? '+' : ''}USDT {uPnL.toFixed(4)}
+                                </span>
+                              </td>
+                              <td className="py-3 font-medium">
+                                <span className={isProfitable ? 'text-emerald-400' : 'text-rose-400'}>
+                                  {isProfitable ? '+' : ''}{uPnLPct.toFixed(2)}%
+                                </span>
+                              </td>
+                              <td className="py-3 text-right">
+                                <button
+                                  onClick={() => handleVirtualSell(pos.symbol, pos.quantity)}
+                                  disabled={isTradingDisabled}
+                                  className="px-2.5 py-1 rounded bg-rose-600/20 border border-rose-500/30 text-rose-300 text-[11px] font-semibold hover:bg-rose-600/30 transition disabled:opacity-40"
+                                >
+                                  CLOSE / SELL
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <div className="py-8 text-center text-slate-400 text-xs">
+                      Henüz açık simülasyon pozisyonu bulunmuyor.
+                    </div>
+                  )
                 ) : (
-                  <div className="py-8 text-center text-slate-400 text-xs">
-                    Henüz açık simülasyon pozisyonu bulunmuyor.
-                  </div>
+                  account?.positions && account.positions.length > 0 ? (
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="text-slate-400 border-b border-slate-800/60 pb-2">
+                          <th className="py-2.5 font-medium">Varlık</th>
+                          <th className="py-2.5 font-medium">Miktar</th>
+                          <th className="py-2.5 font-medium">Giriş Fiyatı</th>
+                          <th className="py-2.5 font-medium">Gerçek Piyasa Fiyatı</th>
+                          <th className="py-2.5 font-medium">Piyasa Değeri</th>
+                          <th className="py-2.5 font-medium">Kar / Zarar (P&L)</th>
+                          <th className="py-2.5 font-medium text-right">Aksiyon</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/50">
+                        {account.positions.map((pos) => {
+                          const isProfitable = pos.unrealizedPl >= 0;
+                          return (
+                            <tr key={pos.symbol} className="hover:bg-slate-800/30 transition">
+                              <td className="py-3 font-semibold text-white">{pos.symbol}</td>
+                              <td className="py-3 text-slate-300 font-mono">{pos.quantity}</td>
+                              <td className="py-3 text-slate-300">{currencySymbol}{pos.entryPrice.toFixed(2)}</td>
+                              <td className="py-3 text-emerald-400 font-mono">{currencySymbol}{pos.currentPrice.toFixed(2)}</td>
+                              <td className="py-3 text-slate-300">{currencySymbol}{pos.marketValue.toFixed(2)}</td>
+                              <td className="py-3 font-medium">
+                                <span className={isProfitable ? 'text-emerald-400' : 'text-rose-400'}>
+                                  {isProfitable ? '+' : ''}{currencySymbol}{pos.unrealizedPl.toFixed(2)} ({isProfitable ? '+' : ''}{pos.unrealizedPlPercent.toFixed(2)}%)
+                                </span>
+                              </td>
+                              <td className="py-3 text-right">
+                                <button
+                                  onClick={() => handleExecuteOrder('SELL', pos.quantity, 'MANUAL')}
+                                  disabled={isTradingDisabled}
+                                  className="px-2.5 py-1 rounded bg-rose-600/20 border border-rose-500/30 text-rose-300 text-[11px] font-semibold hover:bg-rose-600/30 transition disabled:opacity-40"
+                                >
+                                  CLOSE / SELL
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <div className="py-8 text-center text-slate-400 text-xs">
+                      Henüz açık pozisyon bulunmuyor.
+                    </div>
+                  )
                 )}
               </div>
             )}
@@ -783,70 +1110,134 @@ export default function TradingDashboard() {
             {/* Orders Table */}
             {activeTableTab === 'orders' && (
               <div className="overflow-x-auto mt-3">
-                {orders.length > 0 ? (
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr className="text-slate-400 border-b border-slate-800/60 pb-2">
-                        <th className="py-2.5 font-medium">Zaman</th>
-                        <th className="py-2.5 font-medium">Sembol</th>
-                        <th className="py-2.5 font-medium">Tür</th>
-                        <th className="py-2.5 font-medium">Miktar</th>
-                        <th className="py-2.5 font-medium">Fiyat</th>
-                        <th className="py-2.5 font-medium">Kaynak</th>
-                        <th className="py-2.5 font-medium text-right">Durum</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-800/50">
-                      {orders.map((ord) => (
-                        <tr key={ord.id} className="hover:bg-slate-800/30 transition">
-                          <td className="py-2.5 text-slate-400 text-[11px]">
-                            {new Date(ord.timestamp).toLocaleTimeString()}
-                          </td>
-                          <td className="py-2.5 font-semibold text-white">{ord.symbol}</td>
-                          <td className="py-2.5">
-                            <span
-                              className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                ord.side === 'BUY'
-                                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
-                                  : 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
-                              }`}
-                            >
-                              {ord.side}
-                            </span>
-                          </td>
-                          <td className="py-2.5 font-mono text-slate-200">{ord.quantity}</td>
-                          <td className="py-2.5 text-slate-300">{currencySymbol}{ord.price.toFixed(2)}</td>
-                          <td className="py-2.5">
-                            <span className="flex items-center gap-1 text-[11px] text-slate-400">
-                              {ord.executedBy === 'AI' ? (
-                                <>
-                                  <Sparkles className="w-3 h-3 text-indigo-400" />
-                                  <span className="text-indigo-300">AI Bot</span>
-                                </>
-                              ) : (
-                                <span>Kullanıcı</span>
-                              )}
-                            </span>
-                          </td>
-                          <td className="py-2.5 text-right">
-                            <span className="text-emerald-400 font-medium text-[11px] bg-emerald-500/10 px-2 py-0.5 rounded">
-                              {ord.status}
-                            </span>
-                          </td>
+                {exchange === 'binance' ? (
+                  simWallet.trades.length > 0 ? (
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="text-slate-400 border-b border-slate-800/60 pb-2">
+                          <th className="py-2.5 font-medium">Time</th>
+                          <th className="py-2.5 font-medium">Symbol</th>
+                          <th className="py-2.5 font-medium">BUY / SELL</th>
+                          <th className="py-2.5 font-medium">Execution Price</th>
+                          <th className="py-2.5 font-medium">Quantity</th>
+                          <th className="py-2.5 font-medium">USDT Value</th>
+                          <th className="py-2.5 font-medium">Fee</th>
+                          <th className="py-2.5 font-medium">Realized P&L</th>
+                          <th className="py-2.5 font-medium">Source</th>
+                          <th className="py-2.5 font-medium text-right">JEV Confidence</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/50">
+                        {simWallet.trades.map((tr) => (
+                          <tr key={tr.id} className="hover:bg-slate-800/30 transition">
+                            <td className="py-2.5 text-slate-400 text-[11px]">{tr.time}</td>
+                            <td className="py-2.5 font-semibold text-white">{tr.symbol}</td>
+                            <td className="py-2.5">
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                  tr.side === 'BUY'
+                                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                                    : 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
+                                }`}
+                              >
+                                {tr.side}
+                              </span>
+                            </td>
+                            <td className="py-2.5 text-slate-300">USDT {tr.price.toFixed(2)}</td>
+                            <td className="py-2.5 font-mono text-slate-200">{tr.quantity}</td>
+                            <td className="py-2.5 text-slate-300">USDT {tr.usdtValue.toFixed(2)}</td>
+                            <td className="py-2.5 text-slate-400 text-[11px]">USDT {tr.fee.toFixed(4)}</td>
+                            <td className="py-2.5 font-medium">
+                              {tr.side === 'SELL' && tr.realizedPnL !== undefined ? (
+                                <span className={tr.realizedPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                                  {tr.realizedPnL >= 0 ? '+' : ''}USDT {tr.realizedPnL.toFixed(4)}
+                                </span>
+                              ) : (
+                                <span className="text-slate-500">-</span>
+                              )}
+                            </td>
+                            <td className="py-2.5">
+                              <span className="text-[11px] font-semibold px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300">
+                                {tr.source}
+                              </span>
+                            </td>
+                            <td className="py-2.5 text-right font-mono text-[11px] text-slate-300">
+                              {tr.jevConfidence ? `%${tr.jevConfidence}` : '-'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <div className="py-8 text-center text-slate-400 text-xs">
+                      Henüz işlem kaydı yok.
+                    </div>
+                  )
                 ) : (
-                  <div className="py-8 text-center text-slate-400 text-xs">
-                    Henüz işlem kaydı yok.
-                  </div>
+                  orders.length > 0 ? (
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="text-slate-400 border-b border-slate-800/60 pb-2">
+                          <th className="py-2.5 font-medium">Zaman</th>
+                          <th className="py-2.5 font-medium">Sembol</th>
+                          <th className="py-2.5 font-medium">Tür</th>
+                          <th className="py-2.5 font-medium">Miktar</th>
+                          <th className="py-2.5 font-medium">Fiyat</th>
+                          <th className="py-2.5 font-medium">Kaynak</th>
+                          <th className="py-2.5 font-medium text-right">Durum</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/50">
+                        {orders.map((ord) => (
+                          <tr key={ord.id} className="hover:bg-slate-800/30 transition">
+                            <td className="py-2.5 text-slate-400 text-[11px]">
+                              {new Date(ord.timestamp).toLocaleTimeString()}
+                            </td>
+                            <td className="py-2.5 font-semibold text-white">{ord.symbol}</td>
+                            <td className="py-2.5">
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                  ord.side === 'BUY'
+                                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                                    : 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
+                                }`}
+                              >
+                                {ord.side}
+                              </span>
+                            </td>
+                            <td className="py-2.5 font-mono text-slate-200">{ord.quantity}</td>
+                            <td className="py-2.5 text-slate-300">{currencySymbol}{ord.price.toFixed(2)}</td>
+                            <td className="py-2.5">
+                              <span className="flex items-center gap-1 text-[11px] text-slate-400">
+                                {ord.executedBy === 'AI' ? (
+                                  <>
+                                    <Sparkles className="w-3 h-3 text-indigo-400" />
+                                    <span className="text-indigo-300">AI Bot</span>
+                                  </>
+                                ) : (
+                                  <span>Kullanıcı</span>
+                                )}
+                              </span>
+                            </td>
+                            <td className="py-2.5 text-right">
+                              <span className="text-emerald-400 font-medium text-[11px] bg-emerald-500/10 px-2 py-0.5 rounded">
+                                {ord.status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <div className="py-8 text-center text-slate-400 text-xs">
+                      Henüz işlem kaydı yok.
+                    </div>
+                  )
                 )}
               </div>
             )}
           </div>
         </div>
-
         {/* Right Column (4 cols): AI Decision Engine & Bot */}
         <div className="lg:col-span-4 flex flex-col gap-6">
 
@@ -863,7 +1254,7 @@ export default function TradingDashboard() {
             </div>
 
             <p className="text-xs text-slate-300">
-              Bot her <strong>{botIntervalSec} saniyede bir</strong> gerçek piyasa verisini {aiEngine.toUpperCase()} modeline gönderir, %70 üzeri sinyallerde sanal işlem açar.
+              Bot her <strong>{botIntervalSec} saniyede bir</strong> gerçek Binance piyasa verisini {aiEngine.toUpperCase()} modeline gönderir, %{botMinConfidence} üzeri güvenli sinyallerde sanal cüzdandan işlem açar.
             </p>
 
             <div className="grid grid-cols-2 gap-2 text-xs">
@@ -875,12 +1266,42 @@ export default function TradingDashboard() {
                   disabled={isBotRunning}
                   className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white"
                 >
-                  <option value={10}>10 Saniyede bir (Hızlı)</option>
-                  <option value={15}>15 Saniyede bir (Standart)</option>
-                  <option value={30}>30 Saniyede bir</option>
-                  <option value={60}>60 Saniyede bir</option>
+                  <option value={15}>15 Saniye (Varsayılan)</option>
+                  <option value={30}>30 Saniye</option>
+                  <option value={60}>60 Saniye</option>
+                  <option value={300}>5 Dakika</option>
                 </select>
               </div>
+
+              <div>
+                <label className="text-slate-400 block mb-1">Min. Güven</label>
+                <select
+                  value={botMinConfidence}
+                  onChange={(e) => setBotMinConfidence(Number(e.target.value))}
+                  disabled={isBotRunning}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white"
+                >
+                  <option value={60}>%60 Güven</option>
+                  <option value={70}>%70 Güven (Varsayılan)</option>
+                  <option value={80}>%80 Güven</option>
+                  <option value={90}>%90 Güven</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-slate-400 block mb-1">İşlem Büyüklüğü</label>
+                <select
+                  value={botTradeSizePct}
+                  onChange={(e) => setBotTradeSizePct(Number(e.target.value))}
+                  disabled={isBotRunning}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white"
+                >
+                  <option value={5}>%5 Nakit</option>
+                  <option value={10}>%10 Nakit (Varsayılan)</option>
+                  <option value={25}>%25 Nakit</option>
+                </select>
+              </div>
+
               <div>
                 <label className="text-slate-400 block mb-1">AI Motoru</label>
                 <select
@@ -897,8 +1318,10 @@ export default function TradingDashboard() {
 
             <button
               onClick={() => {
-                if (!isBotRunning && account) {
-                  setInitialEquity(account.equity);
+                if (!isBotRunning && simWallet.equity <= 0.01) {
+                  setTradeNotice('Sanal bakiye tükendiği için bot başlatılamaz. Önce bakiyeyi sıfırlayın.');
+                  setTimeout(() => setTradeNotice(null), 4000);
+                  return;
                 }
                 setIsBotRunning(!isBotRunning);
               }}
@@ -923,9 +1346,9 @@ export default function TradingDashboard() {
             </button>
 
             {/* Real-time Bot Log Stream */}
-            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 flex flex-col gap-1.5 max-h-36 overflow-y-auto font-mono text-[11px]">
+            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 flex flex-col gap-1.5 max-h-48 overflow-y-auto font-mono text-[11px]">
               <span className="text-slate-400 text-[10px] uppercase font-bold pb-1 border-b border-slate-800">
-                Canlı Bot Log Akışı
+                Canlı Bot Log Akışı (Son Değerlendirmeler)
               </span>
               {botLogs.length > 0 ? (
                 botLogs.map((log, i) => (
@@ -946,7 +1369,7 @@ export default function TradingDashboard() {
                 ))
               ) : (
                 <span className="text-slate-400 text-center py-2">
-                  Bot başlatıldığında kararlar buraya akacaktır.
+                  Bot başlatıldığında gerçek piyasa analizleri buraya akacaktır.
                 </span>
               )}
             </div>
@@ -1044,9 +1467,14 @@ export default function TradingDashboard() {
 
           {/* Manual Trade Order Box */}
           <div className="bg-[#121824] border border-slate-800/80 rounded-2xl p-5 shadow-lg flex flex-col gap-4">
-            <h3 className="text-sm font-bold text-white flex items-center gap-2">
-              <Sliders className="w-4 h-4 text-cyan-400" />
-              <span>Manuel Testnet Emri Ver</span>
+            <h3 className="text-sm font-bold text-white flex items-center justify-between">
+              <span className="flex items-center gap-2">
+                <Sliders className="w-4 h-4 text-cyan-400" />
+                <span>{exchange === 'binance' ? 'Manuel Sanal Emir Ver' : 'Manuel Testnet Emri Ver'}</span>
+              </span>
+              <span className="text-[10px] text-slate-400 font-mono">
+                {marketData ? `Fiyat: $${marketData.price.toFixed(2)}` : 'Veri Yok'}
+              </span>
             </h3>
 
             {tradeNotice && (
@@ -1055,36 +1483,96 @@ export default function TradingDashboard() {
               </div>
             )}
 
-            <div>
-              <label className="text-xs text-slate-400 block mb-1">Miktar ({symbol})</label>
-              <input
-                type="number"
-                step="any"
-                value={orderQuantity}
-                onChange={(e) => setOrderQuantity(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono"
-              />
-            </div>
+            {exchange === 'binance' ? (
+              <div className="flex flex-col gap-3">
+                <div>
+                  <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
+                    <span>Emir Tutarı (USDT)</span>
+                    <span className="text-[11px] text-emerald-400">
+                      Nakit: {simWallet.cash.toFixed(2)} USDT
+                    </span>
+                  </div>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.1"
+                    value={orderAmountUsdt}
+                    onChange={(e) => setOrderAmountUsdt(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono"
+                    placeholder="1.00"
+                  />
+                  {/* Quick percentage buttons based on AVAILABLE CASH */}
+                  <div className="grid grid-cols-4 gap-1.5 mt-2">
+                    {[10, 25, 50, 100].map((pct) => (
+                      <button
+                        key={pct}
+                        type="button"
+                        onClick={() => {
+                          const val = ((simWallet.cash * pct) / 100).toFixed(2);
+                          setOrderAmountUsdt(val);
+                        }}
+                        className="py-1 rounded bg-slate-800/90 hover:bg-slate-700 text-slate-300 text-[10px] font-semibold border border-slate-700/60 transition"
+                      >
+                        %{pct}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-            <div className="grid grid-cols-2 gap-3 pt-2">
-              <button
-                onClick={() => handleExecuteOrder('BUY', Number(orderQuantity), 'MANUAL')}
-                disabled={isTradingDisabled || Number(orderQuantity) <= 0}
-                className="py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-600/20 transition disabled:opacity-40"
-              >
-                <ArrowUpRight className="w-4 h-4" />
-                <span>ALIM (BUY)</span>
-              </button>
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                  <button
+                    onClick={() => handleVirtualBuy()}
+                    disabled={isTradingDisabled || parseFloat(orderAmountUsdt) <= 0 || simWallet.cash <= 0}
+                    className="py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-600/20 transition disabled:opacity-40"
+                  >
+                    <ArrowUpRight className="w-4 h-4" />
+                    <span>ALIM (BUY)</span>
+                  </button>
 
-              <button
-                onClick={() => handleExecuteOrder('SELL', Number(orderQuantity), 'MANUAL')}
-                disabled={isTradingDisabled || Number(orderQuantity) <= 0}
-                className="py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-rose-600/20 transition disabled:opacity-40"
-              >
-                <ArrowDownRight className="w-4 h-4" />
-                <span>SATIŞ (SELL)</span>
-              </button>
-            </div>
+                  <button
+                    onClick={() => handleVirtualSell()}
+                    disabled={isTradingDisabled || !simWallet.positions.some((p) => p.symbol === symbol)}
+                    className="py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-rose-600/20 transition disabled:opacity-40"
+                  >
+                    <ArrowDownRight className="w-4 h-4" />
+                    <span>SATIŞ (SELL)</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-3">
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Miktar ({symbol})</label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={orderQuantity}
+                    onChange={(e) => setOrderQuantity(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                  <button
+                    onClick={() => handleExecuteOrder('BUY', Number(orderQuantity), 'MANUAL')}
+                    disabled={isTradingDisabled || Number(orderQuantity) <= 0}
+                    className="py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-600/20 transition disabled:opacity-40"
+                  >
+                    <ArrowUpRight className="w-4 h-4" />
+                    <span>ALIM (BUY)</span>
+                  </button>
+
+                  <button
+                    onClick={() => handleExecuteOrder('SELL', Number(orderQuantity), 'MANUAL')}
+                    disabled={isTradingDisabled || Number(orderQuantity) <= 0}
+                    className="py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-rose-600/20 transition disabled:opacity-40"
+                  >
+                    <ArrowDownRight className="w-4 h-4" />
+                    <span>SATIŞ (SELL)</span>
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </main>
@@ -1138,6 +1626,45 @@ export default function TradingDashboard() {
                 className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 transition"
               >
                 Kapat
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reset Confirmation Modal */}
+      {showResetConfirm && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#121824] border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl flex flex-col gap-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-400" />
+                <span>Simülasyonu Sıfırla</span>
+              </h3>
+              <button
+                onClick={() => setShowResetConfirm(false)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-xs text-slate-300 leading-relaxed whitespace-pre-line">
+              Simülasyonu sıfırlamak istediğinize emin misiniz?
+              Tüm sanal pozisyonlar ve işlem geçmişi temizlenecek.
+              Yeni başlangıç bakiyesi 10.00 USDT olacaktır.
+            </p>
+            <div className="flex justify-end gap-3 pt-3 border-t border-slate-800">
+              <button
+                onClick={() => setShowResetConfirm(false)}
+                className="px-4 py-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 text-xs font-semibold transition"
+              >
+                İptal
+              </button>
+              <button
+                onClick={handleResetSimulation}
+                className="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition shadow-lg shadow-rose-600/30"
+              >
+                Evet, Sıfırla
               </button>
             </div>
           </div>
