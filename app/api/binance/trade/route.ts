@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { executeBinanceTrade } from '@/lib/binance';
+import { executeBinanceTradingOrder } from '@/lib/services/binanceTradingService';
+
+export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request) {
   try {
@@ -13,7 +15,7 @@ export async function POST(request: Request) {
     const apiKey = request.headers.get('x-binance-key') || undefined;
     const secretKey = request.headers.get('x-binance-secret') || undefined;
 
-    const order = await executeBinanceTrade(symbol, side, Number(quantity), executedBy || 'MANUAL', apiKey, secretKey);
+    const order = await executeBinanceTradingOrder(symbol, side, Number(quantity), executedBy || 'MANUAL', apiKey, secretKey);
     return NextResponse.json(order);
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });

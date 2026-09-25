@@ -131,6 +131,7 @@ Respond strictly with a valid JSON object matching this schema:
       support,
       resistance,
     },
+    marketSource: marketData.source || 'LIVE_FEED',
     timestamp: new Date().toISOString(),
   };
 }

@@ -2,6 +2,16 @@ export type ExchangeType = 'nasdaq' | 'binance';
 
 export type ActionType = 'BUY' | 'SELL' | 'HOLD';
 
+export interface Candle {
+  timestamp: number;
+  time: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
 export interface MarketData {
   symbol: string;
   price: number;
@@ -11,27 +21,41 @@ export interface MarketData {
   low24h: number;
   volume24h: number;
   timestamp: number;
+  source: string; // e.g. "BINANCE_MAINNET", "ALPACA_MARKET_DATA", "YAHOO_FINANCE_LIVE"
+  latencyMs: number;
+  isStale: boolean;
+  staleAgeSec?: number;
+  bid?: number;
+  ask?: number;
+  open24h?: number;
+  candles: Candle[];
+  timeframe: string; // "1m" | "5m" | "15m" | "1h" | "4h" | "1d"
   history?: { time: string; price: number }[];
 }
 
 export interface AccountInfo {
+  accountType: 'BINANCE_TESTNET' | 'ALPACA_PAPER';
   equity: number;
   cash: number;
   buyingPower: number;
   currency: string;
   isDemo: boolean;
-  statusMessage?: string;
+  status: 'CONNECTED' | 'API_KEY_INVALID' | 'UNAVAILABLE';
+  statusMessage: string;
   positions: Position[];
+  realizedPnL?: number;
+  unrealizedPnL: number;
+  orders?: TradeOrder[];
 }
 
 export interface Position {
   symbol: string;
   quantity: number;
   entryPrice: number;
-  currentPrice: number;
-  marketValue: number;
-  unrealizedPl: number;
-  unrealizedPlPercent: number;
+  currentPrice: number; // REAL current market price
+  marketValue: number;  // quantity * currentPrice
+  unrealizedPl: number; // (currentPrice - entryPrice) * quantity
+  unrealizedPlPercent: number; // ((currentPrice / entryPrice) - 1) * 100
   side: 'long' | 'short';
 }
 
@@ -46,6 +70,7 @@ export interface TradeOrder {
   executedBy: 'AI' | 'MANUAL';
   exchange: ExchangeType;
   notes?: string;
+  orderType?: 'MARKET' | 'LIMIT';
 }
 
 export interface AIAnalysisResult {
@@ -56,11 +81,31 @@ export interface AIAnalysisResult {
   reasoning: string;
   riskLevel: 'LOW' | 'MEDIUM' | 'HIGH';
   suggestedQuantity: number;
+  marketSource: string;
   keyIndicators: {
     trend: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
     rsiEstimate: number;
     support: number;
     resistance: number;
+    ema20?: number;
+    ema50?: number;
+    atr?: number;
   };
   timestamp: string;
+}
+
+export interface ComponentHealth {
+  status: 'OK' | 'ERROR' | 'UNCONFIGURED';
+  latencyMs?: number;
+  message?: string;
+  source?: string;
+}
+
+export interface SystemHealthReport {
+  timestamp: string;
+  binanceMarket: ComponentHealth;
+  binanceTrading: ComponentHealth;
+  alpacaMarket: ComponentHealth;
+  alpacaTrading: ComponentHealth;
+  jev: ComponentHealth;
 }

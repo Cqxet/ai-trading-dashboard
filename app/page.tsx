@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   TrendingUp,
   Cpu,
@@ -8,8 +8,7 @@ import {
   Settings,
   RefreshCw,
   ShieldCheck,
-  HelpCircle,
-  Zap,
+  AlertTriangle,
   ArrowUpRight,
   ArrowDownRight,
   Sparkles,
@@ -21,30 +20,37 @@ import {
   Play,
   Square,
   BarChart3,
-  Bot
+  Bot,
+  Activity
 } from 'lucide-react';
 import { ExchangeType, MarketData, AccountInfo, AIAnalysisResult, TradeOrder } from '@/types/trading';
 
 const NASDAQ_SYMBOLS = ['AAPL', 'NVDA', 'MSFT', 'TSLA', 'QQQ', 'AMZN'];
 const BINANCE_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
+const TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d'];
 
 export default function TradingDashboard() {
-  const [exchange, setExchange] = useState<ExchangeType>('nasdaq');
-  const [symbol, setSymbol] = useState<string>('AAPL');
-  
-  // Market & Account Data
+  const [exchange, setExchange] = useState<ExchangeType>('binance');
+  const [symbol, setSymbol] = useState<string>('BTCUSDT');
+  const [timeframe, setTimeframe] = useState<string>('1h');
+
+  // Market Data (100% Real from Mainnet / Live Data Feed)
   const [marketData, setMarketData] = useState<MarketData | null>(null);
+  const [isLoadingMarket, setIsLoadingMarket] = useState<boolean>(true);
+  const [marketError, setMarketError] = useState<string | null>(null);
+
+  // Trading Account Data (Separated - Testnet / Paper only)
   const [account, setAccount] = useState<AccountInfo | null>(null);
   const [orders, setOrders] = useState<TradeOrder[]>([]);
   const [activeTableTab, setActiveTableTab] = useState<'positions' | 'orders'>('positions');
 
-  // AI Engine Choice: Gemini vs Jev
-  const [aiEngine, setAiEngine] = useState<'gemini' | 'jev'>('jev');
+  // AI Engine Choice: Jev vs Gemini
+  const [aiEngine, setAiEngine] = useState<'jev' | 'gemini'>('jev');
   const [strategy, setStrategy] = useState<string>('momentum');
   const [aiAnalysis, setAiAnalysis] = useState<AIAnalysisResult | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
 
-  // Continuous Auto-Trading Bot Loop (Sürekli Otomatik Al-Sat Döngüsü)
+  // Continuous Auto-Trading Bot Loop
   const [isBotRunning, setIsBotRunning] = useState<boolean>(false);
   const [botIntervalSec, setBotIntervalSec] = useState<number>(15);
   const [botCountdown, setBotCountdown] = useState<number>(15);
@@ -52,16 +58,16 @@ export default function TradingDashboard() {
   const [botLogs, setBotLogs] = useState<{ time: string; msg: string; type: 'info' | 'buy' | 'sell' | 'hold' }[]>([]);
 
   // Manual Trading
-  const [orderQuantity, setOrderQuantity] = useState<string>('5');
+  const [orderQuantity, setOrderQuantity] = useState<string>('0.00003');
   const [isTrading, setIsTrading] = useState<boolean>(false);
   const [tradeNotice, setTradeNotice] = useState<string | null>(null);
 
-  // Settings & Modals
+  // Modals & Settings
   const [showSettings, setShowSettings] = useState<boolean>(false);
-  const [showGuide, setShowGuide] = useState<boolean>(false);
-  const [isLoadingMarket, setIsLoadingMarket] = useState<boolean>(false);
+  const [showHealth, setShowHealth] = useState<boolean>(false);
+  const [healthData, setHealthData] = useState<any>(null);
 
-  // API Keys (saved in localStorage for client testing)
+  // API Keys (Stored locally for client testing, private server-side fallback used)
   const [geminiKey, setGeminiKey] = useState<string>('');
   const [jevKey, setJevKey] = useState<string>('');
   const [alpacaKey, setAlpacaKey] = useState<string>('');
@@ -69,7 +75,6 @@ export default function TradingDashboard() {
   const [binanceKey, setBinanceKey] = useState<string>('');
   const [binanceSecret, setBinanceSecret] = useState<string>('');
 
-  // Load saved keys from localStorage on mount
   useEffect(() => {
     if (typeof window !== 'undefined') {
       setGeminiKey(localStorage.getItem('gemini_api_key') || '');
@@ -92,7 +97,7 @@ export default function TradingDashboard() {
     }
     setShowSettings(false);
     fetchAccountData();
-    fetchMarketData(symbol);
+    fetchMarketData(symbol, timeframe);
   };
 
   const getHeaders = useCallback(() => {
@@ -109,28 +114,34 @@ export default function TradingDashboard() {
     return headers;
   }, [exchange, geminiKey, jevKey, alpacaKey, alpacaSecret, binanceKey, binanceSecret]);
 
-  // Fetch Market Data
-  const fetchMarketData = useCallback(async (sym: string) => {
+  // Fetch 100% Real Market Data
+  const fetchMarketData = useCallback(async (sym: string, tf: string = '1h') => {
     setIsLoadingMarket(true);
     try {
       const endpoint = exchange === 'nasdaq' ? '/api/nasdaq/market' : '/api/binance/market';
-      const res = await fetch(`${endpoint}?symbol=${sym}`, {
+      const res = await fetch(`${endpoint}?symbol=${sym}&timeframe=${tf}`, {
         headers: getHeaders(),
       });
       if (res.ok) {
-        const data = await res.json();
+        const data: MarketData = await res.json();
         setMarketData(data);
+        setMarketError(null);
         return data;
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setMarketData(null);
+        setMarketError(err.error || 'Market Data Unavailable');
       }
-    } catch (err) {
-      console.error('Failed to load market data', err);
+    } catch (err: any) {
+      setMarketData(null);
+      setMarketError('Market Data Unavailable');
     } finally {
       setIsLoadingMarket(false);
     }
     return null;
   }, [exchange, getHeaders]);
 
-  // Fetch Account & Positions
+  // Fetch Trading Account Data (Separated)
   const fetchAccountData = useCallback(async () => {
     try {
       const endpoint = exchange === 'nasdaq' ? '/api/nasdaq/account' : '/api/binance/account';
@@ -138,7 +149,7 @@ export default function TradingDashboard() {
         headers: getHeaders(),
       });
       if (res.ok) {
-        const data = await res.json();
+        const data: AccountInfo = await res.json();
         setAccount(data);
         setInitialEquity((prev) => (prev === null && data.equity ? data.equity : prev));
         if (data.orders) {
@@ -146,14 +157,23 @@ export default function TradingDashboard() {
         }
       }
     } catch (err) {
-      console.error('Failed to load account data', err);
+      console.error('Failed to load trading account:', err);
     }
   }, [exchange, getHeaders]);
 
-  // Tab change
-  const handleTabChange = (newExchange: ExchangeType) => {
+  // Immediate Symbol Switch (TEST 5: Old data never lingers)
+  const handleSymbolChange = (newSymbol: string) => {
+    setMarketData(null); // Clear previous data immediately!
+    setSymbol(newSymbol);
+    setAiAnalysis(null);
+    fetchMarketData(newSymbol, timeframe);
+  };
+
+  // Tab switch
+  const handleExchangeChange = (newExchange: ExchangeType) => {
     setExchange(newExchange);
     const newSymbol = newExchange === 'nasdaq' ? 'AAPL' : 'BTCUSDT';
+    setMarketData(null);
     setSymbol(newSymbol);
     setOrderQuantity(newExchange === 'nasdaq' ? '5' : '0.00003');
     setAiAnalysis(null);
@@ -176,17 +196,30 @@ export default function TradingDashboard() {
     }
   };
 
+  const fetchHealth = async () => {
+    try {
+      const res = await fetch('/api/health', { headers: getHeaders() });
+      if (res.ok) {
+        const data = await res.json();
+        setHealthData(data);
+      }
+    } catch (err) {
+      console.error('Health check failed:', err);
+    }
+    setShowHealth(true);
+  };
+
   useEffect(() => {
-    fetchMarketData(symbol);
+    fetchMarketData(symbol, timeframe);
     fetchAccountData();
     const interval = setInterval(() => {
-      fetchMarketData(symbol);
+      fetchMarketData(symbol, timeframe);
       fetchAccountData();
-    }, 15000);
+    }, 12000);
     return () => clearInterval(interval);
-  }, [exchange, symbol, fetchMarketData, fetchAccountData]);
+  }, [exchange, symbol, timeframe, fetchMarketData, fetchAccountData]);
 
-  // Execute AI Analysis
+  // Execute AI Analysis with REAL market data
   const runAIAnalysis = async (currentMkt?: MarketData) => {
     const targetMkt = currentMkt || marketData;
     if (!targetMkt) return null;
@@ -250,8 +283,7 @@ export default function TradingDashboard() {
         setTradeNotice(`Hata: ${err.error || 'İşlem başarısız'}`);
         setTimeout(() => setTradeNotice(null), 5000);
       }
-    } catch (err) {
-      console.error('Trade failed:', err);
+    } catch (err: any) {
       setTradeNotice('Bağlantı hatası oluştu');
       setTimeout(() => setTradeNotice(null), 5000);
     } finally {
@@ -270,7 +302,7 @@ export default function TradingDashboard() {
       setBotCountdown((prev) => {
         if (prev <= 1) {
           (async () => {
-            const mkt = await fetchMarketData(symbol);
+            const mkt = await fetchMarketData(symbol, timeframe);
             if (mkt) {
               const analysis = await runAIAnalysis(mkt);
               if (analysis) {
@@ -282,7 +314,7 @@ export default function TradingDashboard() {
                   setBotLogs((l) => [{ time: now, msg: `${mkt.symbol} -> SATIŞ Emri (${analysis.suggestedQuantity} adet, %${analysis.confidence} güven)`, type: 'sell' }, ...l.slice(0, 19)]);
                   await handleExecuteOrder('SELL', analysis.suggestedQuantity, 'AI');
                 } else {
-                  setBotLogs((l) => [{ time: now, msg: `${mkt.symbol} -> BEKLE (Pozisyon korundu, güven: %${analysis.confidence})`, type: 'hold' }, ...l.slice(0, 19)]);
+                  setBotLogs((l) => [{ time: now, msg: `${mkt.symbol} -> BEKLE (Güven: %${analysis.confidence})`, type: 'hold' }, ...l.slice(0, 19)]);
                 }
               }
             }
@@ -294,7 +326,7 @@ export default function TradingDashboard() {
     }, 1000);
 
     return () => clearInterval(intervalTimer);
-  }, [isBotRunning, botIntervalSec, symbol, fetchMarketData]);
+  }, [isBotRunning, botIntervalSec, symbol, timeframe, fetchMarketData]);
 
   const currencySymbol = exchange === 'nasdaq' ? '$' : 'USDT ';
   const currentSymbols = exchange === 'nasdaq' ? NASDAQ_SYMBOLS : BINANCE_SYMBOLS;
@@ -304,10 +336,12 @@ export default function TradingDashboard() {
   const netPnL = initialEquity ? currentEquity - initialEquity : 0;
   const netPnLPct = initialEquity && initialEquity > 0 ? (netPnL / initialEquity) * 100 : 0;
 
+  const isTradingDisabled = account?.status === 'API_KEY_INVALID' || marketData === null;
+
   return (
     <div className="min-h-screen bg-[#0b0e14] text-slate-100 flex flex-col font-sans selection:bg-indigo-500/30">
       {/* Top Navigation Bar */}
-      <header className="border-b border-slate-800/80 bg-[#0f141f]/90 backdrop-blur sticky top-0 z-30 px-4 lg:px-8 py-3.5 flex items-center justify-between">
+      <header className="border-b border-slate-800/80 bg-[#0f141f]/90 backdrop-blur sticky top-0 z-30 px-4 lg:px-8 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 via-violet-600 to-cyan-400 flex items-center justify-center shadow-lg shadow-indigo-500/20">
             <Cpu className="w-5 h-5 text-white" />
@@ -321,26 +355,14 @@ export default function TradingDashboard() {
                 {aiEngine === 'jev' ? '⚡ TypeSafe Jev' : '🧠 Gemini 1.5'}
               </span>
             </div>
-            <p className="text-xs text-slate-400">Nasdaq Paper & Binance Testnet Dual Engine</p>
+            <p className="text-xs text-slate-400">Gerçek Piyasa Verisi & Ayrık Testnet/Paper Simülasyonu</p>
           </div>
         </div>
 
         {/* Exchange Switcher Tabs */}
         <div className="flex items-center bg-[#070a0f] p-1 rounded-xl border border-slate-800">
           <button
-            onClick={() => handleTabChange('nasdaq')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
-              exchange === 'nasdaq'
-                ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md shadow-blue-500/20'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <TrendingUp className="w-3.5 h-3.5" />
-            <span>Nasdaq (Alpaca Paper)</span>
-          </button>
-
-          <button
-            onClick={() => handleTabChange('binance')}
+            onClick={() => handleExchangeChange('binance')}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
               exchange === 'binance'
                 ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-md shadow-amber-500/20'
@@ -348,7 +370,19 @@ export default function TradingDashboard() {
             }`}
           >
             <Layers className="w-3.5 h-3.5" />
-            <span>Binance (Spot Testnet)</span>
+            <span>Binance (Mainnet Data & Spot Testnet)</span>
+          </button>
+
+          <button
+            onClick={() => handleExchangeChange('nasdaq')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
+              exchange === 'nasdaq'
+                ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md shadow-blue-500/20'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <TrendingUp className="w-3.5 h-3.5" />
+            <span>Nasdaq (Real Data & Alpaca Paper)</span>
           </button>
         </div>
 
@@ -356,7 +390,7 @@ export default function TradingDashboard() {
         <div className="flex items-center gap-2.5">
           <button
             onClick={() => {
-              fetchMarketData(symbol);
+              fetchMarketData(symbol, timeframe);
               fetchAccountData();
             }}
             title="Yenile"
@@ -366,11 +400,11 @@ export default function TradingDashboard() {
           </button>
 
           <button
-            onClick={() => setShowGuide(true)}
+            onClick={fetchHealth}
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs font-medium text-slate-300 hover:text-white hover:border-slate-700 transition"
           >
-            <HelpCircle className="w-3.5 h-3.5 text-cyan-400" />
-            <span>API & Bot Rehberi</span>
+            <Activity className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Sistem Sağlığı (Health)</span>
           </button>
 
           <button
@@ -386,14 +420,16 @@ export default function TradingDashboard() {
       {/* Main Container */}
       <main className="flex-1 p-4 lg:p-6 max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-6">
         
-        {/* Left Column (8 cols): Market, Charts, Positions */}
+        {/* Left Column (8 cols): Market & Portfolio */}
         <div className="lg:col-span-8 flex flex-col gap-6">
 
-          {/* Account Metrics Bar */}
+          {/* Account Metrics Bar - Clearly Labeled Testnet / Paper */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="bg-[#121824] border border-slate-800/80 rounded-xl p-4 flex flex-col justify-between">
               <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-                <span>Toplam Bakiye (Equity)</span>
+                <span className="font-semibold text-[11px] text-slate-300">
+                  {exchange === 'binance' ? 'BINANCE TESTNET EQUITY' : 'ALPACA PAPER EQUITY'}
+                </span>
                 <Wallet className="w-3.5 h-3.5 text-blue-400" />
               </div>
               <div className="text-xl font-bold tracking-tight text-white flex items-baseline justify-between">
@@ -410,19 +446,21 @@ export default function TradingDashboard() {
               </div>
               <div className="text-[11px] text-emerald-400 mt-1 flex items-center gap-1">
                 <ShieldCheck className="w-3 h-3" />
-                <span>{account?.isDemo ? '10$ Sandbox Modu' : 'Canlı Testnet'}</span>
+                <span>{account?.isDemo ? 'Sanal Sandbox Modu' : 'Canlı Testnet'}</span>
               </div>
             </div>
 
             <div className="bg-[#121824] border border-slate-800/80 rounded-xl p-4 flex flex-col justify-between">
               <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-                <span>Nakit / Alım Gücü</span>
+                <span className="font-semibold text-[11px] text-slate-300">
+                  {exchange === 'binance' ? 'TESTNET BUYING POWER' : 'PAPER BUYING POWER'}
+                </span>
                 <DollarSign className="w-3.5 h-3.5 text-emerald-400" />
               </div>
               <div className="text-xl font-bold tracking-tight text-white">
                 {account ? `${currencySymbol}${account.buyingPower.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '...'}
               </div>
-              <div className="text-[11px] text-slate-400 mt-1">Kullanılabilir Nakit</div>
+              <div className="text-[11px] text-slate-400 mt-1">Kullanılabilir Sanal Nakit</div>
             </div>
 
             <div className="bg-[#121824] border border-slate-800/80 rounded-xl p-4 flex flex-col justify-between">
@@ -454,15 +492,16 @@ export default function TradingDashboard() {
             </div>
           </div>
 
-          {/* Symbol Selectors & Price Display Card */}
+          {/* Real Market Price Display Card */}
           <div className="bg-[#121824] border border-slate-800/80 rounded-2xl p-5 shadow-lg flex flex-col gap-5">
+            {/* Quick Symbol Pills & Timeframes */}
             <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-800">
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-xs font-medium text-slate-400 mr-1">Hızlı Sembol:</span>
+                <span className="text-xs font-medium text-slate-400 mr-1">Sembol:</span>
                 {currentSymbols.map((s) => (
                   <button
                     key={s}
-                    onClick={() => setSymbol(s)}
+                    onClick={() => handleSymbolChange(s)}
                     className={`px-3 py-1.5 rounded-lg text-xs font-semibold tracking-wider transition ${
                       symbol === s
                         ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
@@ -474,41 +513,79 @@ export default function TradingDashboard() {
                 ))}
               </div>
 
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  placeholder="Sembol..."
-                  value={symbol}
-                  onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-                  className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white uppercase focus:outline-none focus:border-indigo-500 w-28"
-                />
+              {/* Timeframe Switcher */}
+              <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-lg border border-slate-800">
+                {TIMEFRAMES.map((tf) => (
+                  <button
+                    key={tf}
+                    onClick={() => {
+                      setTimeframe(tf);
+                      fetchMarketData(symbol, tf);
+                    }}
+                    className={`px-2 py-1 text-[11px] font-semibold rounded ${
+                      timeframe === tf ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {tf}
+                  </button>
+                ))}
               </div>
             </div>
+
+            {/* Market Error Warning If Data Unavailable */}
+            {marketError && (
+              <div className="p-4 rounded-xl bg-rose-950/40 border border-rose-600/40 text-rose-300 flex items-center gap-3">
+                <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0" />
+                <div>
+                  <h4 className="font-bold text-xs">Piyasa Verisi Alınamadı (Market Data Unavailable)</h4>
+                  <p className="text-[11px] text-rose-200/80 mt-0.5">
+                    Gerçek piyasa bağlantısı sağlanamadı. Güvenlik gereği sahte fiyat üretilmez ve al-sat işlemleri kilitlenir.
+                  </p>
+                </div>
+              </div>
+            )}
 
             {/* Price Banner */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
                 <div className="flex items-center gap-2">
-                  <h1 className="text-2xl font-black tracking-tight text-white">{marketData?.symbol || symbol}</h1>
-                  <span className="text-[11px] font-medium text-slate-400 bg-slate-800 px-2 py-0.5 rounded">
-                    {exchange === 'nasdaq' ? 'Nasdaq Stock' : 'Crypto Spot'}
-                  </span>
-                </div>
-                <div className="flex items-baseline gap-3 mt-1">
-                  <span className="text-3xl font-extrabold tracking-tight text-white">
-                    {currencySymbol}{marketData ? marketData.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 }) : '---'}
+                  <h1 className="text-2xl font-black tracking-tight text-white">{symbol}</h1>
+                  <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-2 py-0.5 rounded">
+                    {marketData?.source || 'MAINNET FEED'}
                   </span>
                   {marketData && (
-                    <span
-                      className={`inline-flex items-center gap-0.5 text-xs font-bold px-2 py-0.5 rounded ${
-                        marketData.changePercent24h >= 0
-                          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                          : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-                      }`}
-                    >
-                      {marketData.changePercent24h >= 0 ? <ArrowUpRight className="w-3.5 h-3.5" /> : <ArrowDownRight className="w-3.5 h-3.5" />}
-                      {marketData.changePercent24h >= 0 ? '+' : ''}{marketData.changePercent24h.toFixed(2)}%
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      {marketData.latencyMs}ms
                     </span>
+                  )}
+                  {marketData?.isStale && (
+                    <span className="text-[10px] font-bold text-amber-300 bg-amber-950/80 border border-amber-600/50 px-2 py-0.5 rounded animate-pulse">
+                      STALE ({marketData.staleAgeSec}s önce)
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-baseline gap-3 mt-1">
+                  {isLoadingMarket && !marketData ? (
+                    <div className="h-9 w-48 bg-slate-800 animate-pulse rounded-lg mt-1" />
+                  ) : marketData ? (
+                    <>
+                      <span className="text-3xl font-extrabold tracking-tight text-white">
+                        {currencySymbol}{marketData.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
+                      </span>
+                      <span
+                        className={`inline-flex items-center gap-0.5 text-xs font-bold px-2 py-0.5 rounded ${
+                          marketData.changePercent24h >= 0
+                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                            : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                        }`}
+                      >
+                        {marketData.changePercent24h >= 0 ? <ArrowUpRight className="w-3.5 h-3.5" /> : <ArrowDownRight className="w-3.5 h-3.5" />}
+                        {marketData.changePercent24h >= 0 ? '+' : ''}{marketData.changePercent24h.toFixed(2)}%
+                      </span>
+                    </>
+                  ) : (
+                    <span className="text-xl font-bold text-slate-500">Veri Bekleniyor...</span>
                   )}
                 </div>
               </div>
@@ -516,57 +593,78 @@ export default function TradingDashboard() {
               {/* 24h Stats */}
               <div className="grid grid-cols-3 gap-4 text-xs bg-slate-900/60 p-3 rounded-xl border border-slate-800">
                 <div>
-                  <span className="text-slate-400 block text-[10px] uppercase">24s En Yüksek</span>
+                  <span className="text-slate-400 block text-[10px] uppercase font-semibold">24s En Yüksek</span>
                   <span className="font-semibold text-slate-200">
-                    {currencySymbol}{marketData?.high24h.toFixed(2) || '---'}
+                    {marketData ? `${currencySymbol}${marketData.high24h.toLocaleString(undefined, { minimumFractionDigits: 2 })}` : '---'}
                   </span>
                 </div>
                 <div>
-                  <span className="text-slate-400 block text-[10px] uppercase">24s En Düşük</span>
+                  <span className="text-slate-400 block text-[10px] uppercase font-semibold">24s En Düşük</span>
                   <span className="font-semibold text-slate-200">
-                    {currencySymbol}{marketData?.low24h.toFixed(2) || '---'}
+                    {marketData ? `${currencySymbol}${marketData.low24h.toLocaleString(undefined, { minimumFractionDigits: 2 })}` : '---'}
                   </span>
                 </div>
                 <div>
-                  <span className="text-slate-400 block text-[10px] uppercase">24s Hacim</span>
+                  <span className="text-slate-400 block text-[10px] uppercase font-semibold">24s Hacim</span>
                   <span className="font-semibold text-slate-200">
-                    {marketData ? marketData.volume24h.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '---'}
+                    {marketData ? marketData.volume24h.toLocaleString(undefined, { maximumFractionDigits: 1 }) : '---'}
                   </span>
                 </div>
               </div>
             </div>
 
-            {/* Sparkline / History Visualizer */}
-            {marketData?.history && marketData.history.length > 0 && (
+            {/* Real Candlestick Chart from Live Market Data */}
+            {marketData?.candles && marketData.candles.length > 0 && (
               <div className="mt-2 pt-4 border-t border-slate-800/80">
                 <div className="flex items-center justify-between text-[11px] text-slate-400 mb-2">
-                  <span>24 Saatlik Fiyat Eğrisi (Saatlik Barlar)</span>
-                  <span className="text-indigo-400 font-mono">Canlı Akış</span>
+                  <span>Gerçek Mum / Candle Grafiği ({timeframe} Periyot)</span>
+                  <span className="text-emerald-400 font-mono text-[10px]">
+                    Kaynak: {marketData.source} ({marketData.candles.length} mum)
+                  </span>
                 </div>
-                <div className="h-28 w-full flex items-end gap-1.5 pt-2">
+
+                <div className="h-32 w-full flex items-end gap-1 pt-2">
                   {(() => {
-                    const prices = marketData.history.map((h) => h.price);
-                    const min = Math.min(...prices);
-                    const max = Math.max(...prices);
+                    const candles = marketData.candles;
+                    const min = Math.min(...candles.map(c => c.low));
+                    const max = Math.max(...candles.map(c => c.high));
                     const range = max - min || 1;
 
-                    return marketData.history.map((item, idx) => {
-                      const heightPercent = Math.max(15, Math.min(100, Math.round(((item.price - min) / range) * 85 + 15)));
-                      const isUp = idx > 0 ? item.price >= marketData.history![idx - 1].price : true;
+                    return candles.map((c, idx) => {
+                      const isUp = c.close >= c.open;
+                      const wickBottom = ((c.low - min) / range) * 100;
+                      const wickHeight = Math.max(2, ((c.high - c.low) / range) * 100);
+
+                      const bodyBottom = ((Math.min(c.open, c.close) - min) / range) * 100;
+                      const bodyHeight = Math.max(3, (Math.abs(c.close - c.open) / range) * 100);
+
                       return (
                         <div
                           key={idx}
-                          className="flex-1 flex flex-col items-center gap-1 group relative h-full justify-end"
+                          className="flex-1 relative h-full flex items-end justify-center group"
                         >
+                          {/* Candle Wick */}
                           <div
-                            style={{ height: `${heightPercent}%` }}
-                            className={`w-full rounded-t-sm transition-all duration-300 ${
-                              isUp ? 'bg-emerald-500/70 group-hover:bg-emerald-400' : 'bg-rose-500/70 group-hover:bg-rose-400'
+                            style={{ bottom: `${wickBottom}%`, height: `${wickHeight}%` }}
+                            className={`absolute w-[1.5px] ${isUp ? 'bg-emerald-400/80' : 'bg-rose-400/80'}`}
+                          />
+                          {/* Candle Body */}
+                          <div
+                            style={{ bottom: `${bodyBottom}%`, height: `${bodyHeight}%` }}
+                            className={`w-full max-w-[8px] rounded-xs transition-all ${
+                              isUp ? 'bg-emerald-500 group-hover:bg-emerald-400' : 'bg-rose-500 group-hover:bg-rose-400'
                             }`}
                           />
-                          <div className="absolute bottom-full mb-1 hidden group-hover:flex flex-col items-center z-20 pointer-events-none">
-                            <div className="bg-slate-900 border border-slate-700 text-[10px] px-2 py-1 rounded shadow-xl text-white whitespace-nowrap">
-                              {item.time}: {currencySymbol}{item.price.toFixed(2)}
+                          {/* Hover Tooltip */}
+                          <div className="absolute bottom-full mb-1 hidden group-hover:flex flex-col items-center z-30 pointer-events-none">
+                            <div className="bg-slate-900 border border-slate-700 text-[10px] p-2 rounded shadow-2xl text-white whitespace-nowrap font-mono space-y-0.5">
+                              <div className="text-slate-400">{c.time}</div>
+                              <div>Açılış: {currencySymbol}{c.open}</div>
+                              <div>Yüksek: {currencySymbol}{c.high}</div>
+                              <div>Düşük: {currencySymbol}{c.low}</div>
+                              <div className={isUp ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                                Kapanış: {currencySymbol}{c.close}
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -604,7 +702,7 @@ export default function TradingDashboard() {
                 </button>
               </div>
               <span className="text-[11px] text-slate-400">
-                {account?.statusMessage || 'Hazır'}
+                {account?.statusMessage || 'Bağlı'}
               </span>
             </div>
 
@@ -618,6 +716,7 @@ export default function TradingDashboard() {
                         <th className="py-2.5 font-medium">Varlık</th>
                         <th className="py-2.5 font-medium">Miktar</th>
                         <th className="py-2.5 font-medium">Giriş Fiyatı</th>
+                        <th className="py-2.5 font-medium">Gerçek Piyasa Fiyatı</th>
                         <th className="py-2.5 font-medium">Piyasa Değeri</th>
                         <th className="py-2.5 font-medium">Kar / Zarar (P&L)</th>
                         <th className="py-2.5 font-medium text-right">Aksiyon</th>
@@ -631,6 +730,7 @@ export default function TradingDashboard() {
                             <td className="py-3 font-semibold text-white">{pos.symbol}</td>
                             <td className="py-3 text-slate-300 font-mono">{pos.quantity}</td>
                             <td className="py-3 text-slate-300">{currencySymbol}{pos.entryPrice.toFixed(2)}</td>
+                            <td className="py-3 text-emerald-400 font-mono">{currencySymbol}{pos.currentPrice.toFixed(2)}</td>
                             <td className="py-3 text-slate-300">{currencySymbol}{pos.marketValue.toFixed(2)}</td>
                             <td className="py-3 font-medium">
                               <span className={isProfitable ? 'text-emerald-400' : 'text-rose-400'}>
@@ -640,8 +740,8 @@ export default function TradingDashboard() {
                             <td className="py-3 text-right">
                               <button
                                 onClick={() => handleExecuteOrder('SELL', pos.quantity, 'MANUAL')}
-                                disabled={isTrading}
-                                className="px-2.5 py-1 rounded bg-rose-600/20 border border-rose-500/30 text-rose-300 text-[11px] font-semibold hover:bg-rose-600/30 transition"
+                                disabled={isTradingDisabled}
+                                className="px-2.5 py-1 rounded bg-rose-600/20 border border-rose-500/30 text-rose-300 text-[11px] font-semibold hover:bg-rose-600/30 transition disabled:opacity-40"
                               >
                                 Kapat / Sat
                               </button>
@@ -653,7 +753,7 @@ export default function TradingDashboard() {
                   </table>
                 ) : (
                   <div className="py-8 text-center text-slate-400 text-xs">
-                    Henüz açık pozisyon bulunmuyor. AI botunu başlatarak veya manuel alım yaparak pozisyon açabilirsiniz.
+                    Henüz açık simülasyon pozisyonu bulunmuyor.
                   </div>
                 )}
               </div>
@@ -726,7 +826,7 @@ export default function TradingDashboard() {
           </div>
         </div>
 
-        {/* Right Column (4 cols): AI Decision Engine & Continuous Auto-Trading Bot */}
+        {/* Right Column (4 cols): AI Decision Engine & Bot */}
         <div className="lg:col-span-4 flex flex-col gap-6">
 
           {/* Continuous Auto-Trading Bot Panel */}
@@ -742,7 +842,7 @@ export default function TradingDashboard() {
             </div>
 
             <p className="text-xs text-slate-300">
-              Bot her <strong>{botIntervalSec} saniyede bir</strong> piyasa verisini {aiEngine.toUpperCase()} modeline gönderir, %70 üzeri güven sinyallerinde otomatik al/sat yapar ve kârlılığı ölçer.
+              Bot her <strong>{botIntervalSec} saniyede bir</strong> gerçek piyasa verisini {aiEngine.toUpperCase()} modeline gönderir, %70 üzeri sinyallerde sanal işlem açar.
             </p>
 
             <div className="grid grid-cols-2 gap-2 text-xs">
@@ -757,7 +857,7 @@ export default function TradingDashboard() {
                   <option value={10}>10 Saniyede bir (Hızlı)</option>
                   <option value={15}>15 Saniyede bir (Standart)</option>
                   <option value={30}>30 Saniyede bir</option>
-                  <option value={60}>60 Saniyede bir (1 Dakika)</option>
+                  <option value={60}>60 Saniyede bir</option>
                 </select>
               </div>
               <div>
@@ -768,8 +868,8 @@ export default function TradingDashboard() {
                   disabled={isBotRunning}
                   className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white"
                 >
-                  <option value="jev">⚡ TypeSafe Jev (Hızlı)</option>
-                  <option value="gemini">🧠 Gemini 1.5 Flash</option>
+                  <option value="jev">⚡ TypeSafe Jev</option>
+                  <option value="gemini">🧠 Gemini 1.5</option>
                 </select>
               </div>
             </div>
@@ -781,11 +881,12 @@ export default function TradingDashboard() {
                 }
                 setIsBotRunning(!isBotRunning);
               }}
+              disabled={isTradingDisabled}
               className={`w-full py-2.5 px-4 rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-lg transition ${
                 isBotRunning
                   ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/30'
                   : 'bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-cyan-600/30'
-              }`}
+              } disabled:opacity-40`}
             >
               {isBotRunning ? (
                 <>
@@ -801,7 +902,7 @@ export default function TradingDashboard() {
             </button>
 
             {/* Real-time Bot Log Stream */}
-            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 flex flex-col gap-1.5 max-h-40 overflow-y-auto font-mono text-[11px]">
+            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 flex flex-col gap-1.5 max-h-36 overflow-y-auto font-mono text-[11px]">
               <span className="text-slate-400 text-[10px] uppercase font-bold pb-1 border-b border-slate-800">
                 Canlı Bot Log Akışı
               </span>
@@ -824,7 +925,7 @@ export default function TradingDashboard() {
                 ))
               ) : (
                 <span className="text-slate-400 text-center py-2">
-                  Bot başlatıldığında al-sat kararları buraya akacaktır.
+                  Bot başlatıldığında kararlar buraya akacaktır.
                 </span>
               )}
             </div>
@@ -835,10 +936,10 @@ export default function TradingDashboard() {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Sparkles className="w-4 h-4 text-indigo-400 animate-pulse" />
-                <span className="font-bold text-sm text-white">Manuel AI Analizi</span>
+                <span className="font-bold text-sm text-white">Gerçek Piyasa Analizi</span>
               </div>
               <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded bg-indigo-900/50 text-indigo-300 border border-indigo-700/50">
-                {aiEngine === 'jev' ? 'TypeSafe Jev' : 'gemini-1.5-flash'}
+                {aiEngine === 'jev' ? 'TypeSafe Jev' : 'Gemini 1.5'}
               </span>
             </div>
 
@@ -850,12 +951,12 @@ export default function TradingDashboard() {
               {isAnalyzing ? (
                 <>
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>Piyasa Analiz Ediliyor...</span>
+                  <span>Gerçek Piyasa Analiz Ediliyor...</span>
                 </>
               ) : (
                 <>
                   <Cpu className="w-4 h-4" />
-                  <span>Tek Seferlik AI Analiz Et ({marketData?.symbol || symbol})</span>
+                  <span>AI Analizi Çalıştır ({symbol})</span>
                 </>
               )}
             </button>
@@ -901,12 +1002,12 @@ export default function TradingDashboard() {
                 {aiAnalysis.action !== 'HOLD' && (
                   <button
                     onClick={() => handleExecuteOrder(aiAnalysis.action as 'BUY' | 'SELL', aiAnalysis.suggestedQuantity, 'AI')}
-                    disabled={isTrading}
+                    disabled={isTradingDisabled}
                     className={`w-full py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition ${
                       aiAnalysis.action === 'BUY'
                         ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-600/30'
                         : 'bg-rose-600 hover:bg-rose-500 text-white shadow-md shadow-rose-600/30'
-                    }`}
+                    } disabled:opacity-40`}
                   >
                     <Check className="w-3.5 h-3.5" />
                     <span>Emri Uygula ({aiAnalysis.action} {aiAnalysis.suggestedQuantity} Adet)</span>
@@ -934,7 +1035,7 @@ export default function TradingDashboard() {
             )}
 
             <div>
-              <label className="text-xs text-slate-400 block mb-1">Miktar ({marketData?.symbol || symbol})</label>
+              <label className="text-xs text-slate-400 block mb-1">Miktar ({symbol})</label>
               <input
                 type="number"
                 step="any"
@@ -947,8 +1048,8 @@ export default function TradingDashboard() {
             <div className="grid grid-cols-2 gap-3 pt-2">
               <button
                 onClick={() => handleExecuteOrder('BUY', Number(orderQuantity), 'MANUAL')}
-                disabled={isTrading || Number(orderQuantity) <= 0}
-                className="py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-600/20 transition disabled:opacity-50"
+                disabled={isTradingDisabled || Number(orderQuantity) <= 0}
+                className="py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-600/20 transition disabled:opacity-40"
               >
                 <ArrowUpRight className="w-4 h-4" />
                 <span>ALIM (BUY)</span>
@@ -956,8 +1057,8 @@ export default function TradingDashboard() {
 
               <button
                 onClick={() => handleExecuteOrder('SELL', Number(orderQuantity), 'MANUAL')}
-                disabled={isTrading || Number(orderQuantity) <= 0}
-                className="py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-rose-600/20 transition disabled:opacity-50"
+                disabled={isTradingDisabled || Number(orderQuantity) <= 0}
+                className="py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-rose-600/20 transition disabled:opacity-40"
               >
                 <ArrowDownRight className="w-4 h-4" />
                 <span>SATIŞ (SELL)</span>
@@ -966,6 +1067,61 @@ export default function TradingDashboard() {
           </div>
         </div>
       </main>
+
+      {/* Health Modal */}
+      {showHealth && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#121824] border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl flex flex-col gap-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <Activity className="w-4 h-4 text-emerald-400" />
+                <span>Sistem Sağlık Raporu (/api/health)</span>
+              </h2>
+              <button onClick={() => setShowHealth(false)} className="text-slate-400 hover:text-white">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {healthData ? (
+              <div className="space-y-3 text-xs">
+                {Object.entries(healthData).filter(([k]) => k !== 'timestamp').map(([key, val]: any) => (
+                  <div key={key} className="bg-slate-900/80 p-3 rounded-xl border border-slate-800 flex items-center justify-between">
+                    <div>
+                      <div className="font-semibold text-slate-200 capitalize">{key}</div>
+                      <div className="text-[11px] text-slate-400">{val.message}</div>
+                    </div>
+                    <div className="text-right">
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                        val.status === 'OK'
+                          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                          : val.status === 'UNCONFIGURED'
+                          ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
+                          : 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
+                      }`}>
+                        {val.status}
+                      </span>
+                      {val.latencyMs !== undefined && (
+                        <div className="text-[10px] text-slate-500 font-mono mt-0.5">{val.latencyMs}ms</div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="py-8 text-center text-xs text-slate-400">Yükleniyor...</div>
+            )}
+
+            <div className="flex justify-end pt-2 border-t border-slate-800">
+              <button
+                onClick={() => setShowHealth(false)}
+                className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 transition"
+              >
+                Kapat
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Settings Modal */}
       {showSettings && (
@@ -1073,66 +1229,6 @@ export default function TradingDashboard() {
                 className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 shadow-md shadow-indigo-600/30 transition"
               >
                 Kaydet ve Uygula
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Guide Modal */}
-      {showGuide && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#121824] border border-slate-800 rounded-2xl max-w-2xl w-full p-6 shadow-2xl flex flex-col gap-4 max-h-[85vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-              <h2 className="text-base font-bold text-white flex items-center gap-2">
-                <HelpCircle className="w-4 h-4 text-cyan-400" />
-                <span>API Anahtarları & Bot Nasıl Çalışır?</span>
-              </h2>
-              <button onClick={() => setShowGuide(false)} className="text-slate-400 hover:text-white">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-4 text-xs text-slate-300 leading-relaxed">
-              <div className="bg-slate-900/80 p-3.5 rounded-xl border border-slate-800">
-                <h4 className="font-bold text-cyan-400 mb-1">1. TypeSafe Jev API Nedir ve Nasıl Alınır?</h4>
-                <p>
-                  <strong>TypeSafe Jev</strong> (OpenAI eski araştırmacısı Diogo Almeida tarafından geliştirilen), metin üretmek yerine milisaniyeler (70-100ms) içinde doğrudan kalibre edilmiş olasılıklarla al/sat kararı üreten bir System-1 karar motorudur. <strong>typesafe.ai</strong> üzerinden API erişimi alınabilir.
-                </p>
-              </div>
-
-              <div className="bg-slate-900/80 p-3.5 rounded-xl border border-slate-800">
-                <h4 className="font-bold text-blue-400 mb-1">2. Alpaca Paper Trading ($100,000 Sanal Nasdaq)</h4>
-                <p>
-                  1. <strong>app.alpaca.markets</strong> adresinde ücretsiz hesap oluşturun.<br/>
-                  2. Sol menüde &apos;Live Trading&apos; yerine <strong>Paper Trading</strong> seçin.<br/>
-                  3. Dashboard&apos;daki &apos;API Keys&apos; bölümünden <strong>Generate New Key</strong> yapın. Anında $100k sanal bakiye tanımlanır.
-                </p>
-              </div>
-
-              <div className="bg-slate-900/80 p-3.5 rounded-xl border border-slate-800">
-                <h4 className="font-bold text-amber-400 mb-1">3. Binance Spot Testnet (Sanal Kripto)</h4>
-                <p>
-                  1. <strong>testnet.binance.vision</strong> adresini açın.<br/>
-                  2. <strong>Log In with GitHub</strong> ile tek tıkla giriş yapın.<br/>
-                  3. <strong>Generate HMAC_SHA256 Key</strong> butonuna basarak API Key ve Secret Key alın.
-                </p>
-              </div>
-
-              <div className="bg-slate-900/80 p-3.5 rounded-xl border border-slate-800">
-                <h4 className="font-bold text-emerald-400 mb-1">4. Sürekli Al-Sat Botu ve Kârlılık Takibi</h4>
-                <p>
-                  Bot aktif edildiğinde seçtiğiniz periyotta (örn: 15s) fiyatları okur, modeli çağırır ve uygun fırsat bulduğunda testnet üzerinden pozisyon açar/kapatır. Üst bardaki <strong>Net Kar / Zarar (Bot PnL)</strong> kutusundan botun kâra geçip geçmediğini anlık takip edebilirsiniz.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex justify-end pt-3 border-t border-slate-800">
-              <button
-                onClick={() => setShowGuide(false)}
-                className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 transition"
-              >
-                Kapat
               </button>
             </div>
           </div>

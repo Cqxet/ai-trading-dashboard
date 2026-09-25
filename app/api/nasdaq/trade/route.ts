@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { executeNasdaqTrade } from '@/lib/alpaca';
+import { executeAlpacaPaperTrade } from '@/lib/services/alpacaTradingService';
+
+export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request) {
   try {
@@ -13,7 +15,7 @@ export async function POST(request: Request) {
     const apiKey = request.headers.get('x-alpaca-key') || undefined;
     const secretKey = request.headers.get('x-alpaca-secret') || undefined;
 
-    const order = await executeNasdaqTrade(symbol, side, Number(quantity), executedBy || 'MANUAL', apiKey, secretKey);
+    const order = await executeAlpacaPaperTrade(symbol, side, Number(quantity), executedBy || 'MANUAL', apiKey, secretKey);
     return NextResponse.json(order);
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
