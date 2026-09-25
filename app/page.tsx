@@ -44,6 +44,9 @@ import {
 } from '@/lib/simulationWallet';
 import { scanBinanceMarkets, ScannedMarketCandidate, ScannerSummary } from '@/lib/services/marketScannerService';
 import { evaluateTradeRisk, DEFAULT_RISK_LIMITS } from '@/lib/services/riskEngine';
+import { getBinanceStream } from '@/lib/services/binanceStreamService';
+import { registerMarketTick, evaluateFastSignal } from '@/lib/services/fastSignalEngine';
+import { MarketTick, StrategySupervisorState, EngineStats } from '@/types/fastEngine';
 
 const NASDAQ_SYMBOLS = ['AAPL', 'NVDA', 'MSFT', 'TSLA', 'QQQ', 'AMZN'];
 const BINANCE_SYMBOLS = [
@@ -117,15 +120,41 @@ export default function TradingDashboard() {
 
   // Continuous Auto-Trading Bot Loop & JEV Settings
   const [isBotRunning, setIsBotRunning] = useState<boolean>(false);
-  const [botIntervalSec, setBotIntervalSec] = useState<number>(15);
+  const [botFastLoopMs, setBotFastLoopMs] = useState<number>(100); // 100 ms ultra-fast signal loop
+  const [botJevSupervisorSec, setBotJevSupervisorSec] = useState<number>(5); // 5s async supervisor
   const [botMinConfidence, setBotMinConfidence] = useState<number>(70);
   const [botTradeSizePct, setBotTradeSizePct] = useState<number>(10);
-  const [botCooldownSec, setBotCooldownSec] = useState<number>(30);
-  const [botCountdown, setBotCountdown] = useState<number>(15);
+  const [botCooldownMs, setBotCooldownMs] = useState<number>(250); // 250 ms anti-duplicate order cooldown
   const [botLogs, setBotLogs] = useState<{ time: string; msg: string; type: 'info' | 'buy' | 'sell' | 'hold' }[]>([]);
-  const lastTradeTimeRef = React.useRef<number>(0);
+  const [supervisorState, setSupervisorState] = useState<StrategySupervisorState | null>(null);
+
+  // Engine Performance Statistics
+  const [engineStats, setEngineStats] = useState<EngineStats>({
+    engineMode: 'ULTRA FAST SIMULATION',
+    marketStreamStatus: 'DISCONNECTED',
+    fastLoopIntervalMs: 100,
+    scannerIntervalSec: 2,
+    jevIntervalSec: 5,
+    watchlist: ['SOLUSDT', 'ETHUSDT', 'BTCUSDT', 'LINKUSDT', 'SUIUSDT'],
+    ticksReceived: 0,
+    signalsProcessed: 0,
+    tradesCount: 0,
+    engineLatencyMs: 4,
+    lastTickTimestamp: Date.now(),
+    activeTarget: null,
+  });
+
+  // State Transition & Trade Protection Refs (Lock-free memory loop)
+  const lastOrderTimeRef = React.useRef<number>(0);
+  const lastSignalStateRef = React.useRef<Record<string, string>>({}); // symbol -> 'BUY' | 'SELL' | 'HOLD'
   const simWalletRef = React.useRef<SimulationWallet>(simWallet);
   simWalletRef.current = simWallet;
+  const recentTradesCountRef = React.useRef<{ timestamp: number }[]>([]);
+  const ticksCountRef = React.useRef<number>(0);
+  const signalsCountRef = React.useRef<number>(0);
+  const lastTickTimeRef = React.useRef<number>(Date.now());
+  const supervisorStateRef = React.useRef<StrategySupervisorState | null>(null);
+  supervisorStateRef.current = supervisorState;
 
   // Manual Trading (Default mode: USDT input)
   const [orderAmountUsdt, setOrderAmountUsdt] = useState<string>('1.00');
@@ -485,7 +514,78 @@ export default function TradingDashboard() {
     return () => clearInterval(timer);
   }, [exchange, symbol, marketData]);
 
-  // Periodic Market Scanner trigger (Every 30s)
+  // ==========================================
+  // REAL-TIME WEBSOCKET STREAMING SUBSCRIPTION
+  // ==========================================
+  useEffect(() => {
+    if (exchange !== 'binance' || typeof window === 'undefined') return;
+
+    const stream = getBinanceStream();
+    stream.setWatchlist(engineStats.watchlist);
+    stream.start();
+
+    const unsubTick = stream.subscribe((tick: MarketTick) => {
+      ticksCountRef.current += 1;
+      lastTickTimeRef.current = Date.now();
+
+      // In-memory indicator update (Zero allocation)
+      registerMarketTick(tick);
+
+      // Keep latest prices synced for wallet recalculations
+      setSymbolPrices((prev) => {
+        if (prev[tick.symbol] === tick.price) return prev;
+        return { ...prev, [tick.symbol]: tick.price };
+      });
+
+      // If tick matches current active UI symbol, update marketData price
+      setMarketData((prev) => {
+        if (prev && prev.symbol === tick.symbol) {
+          return {
+            ...prev,
+            price: tick.price,
+            bid: tick.bid,
+            ask: tick.ask,
+            timestamp: tick.timestamp,
+          };
+        }
+        return prev;
+      });
+
+      // Fast Exit Check on tick arrival (Liquidation / Stop-Loss / Take-Profit)
+      const currentW = simWalletRef.current;
+      const openPos = currentW.positions.find((p) => p.symbol === tick.symbol);
+      if (openPos && openPos.quantity > 0) {
+        const uPnLPct = ((tick.price / openPos.averageEntryPrice) - 1) * 100;
+        // Fast Stop-Loss (-2.0%) or Fast Take-Profit (+3.5%)
+        if (uPnLPct <= -2.0 || uPnLPct >= 3.5) {
+          const isStop = uPnLPct <= -2.0;
+          const sellRes = executeSimulationSell(currentW, tick.symbol, openPos.quantity, tick.price, 'JEV_BOT');
+          if (sellRes.success && sellRes.trade) {
+            setSimWallet(sellRes.wallet);
+            const pnl = sellRes.trade.realizedPnL || 0;
+            const logMsg = isStop
+              ? `${tick.symbol} | STOP LOSS TETIKLENDI (%${uPnLPct.toFixed(2)}) | Realized P&L: USDT ${pnl.toFixed(4)}`
+              : `${tick.symbol} | TAKE PROFIT TETIKLENDI (+%${uPnLPct.toFixed(2)}) | Realized P&L: USDT ${pnl.toFixed(4)}`;
+            setBotLogs((l) => [
+              { time: new Date().toLocaleTimeString(), msg: logMsg, type: isStop ? 'sell' : 'buy' },
+              ...l.slice(0, 29),
+            ]);
+          }
+        }
+      }
+    });
+
+    const unsubStatus = stream.onStatus((status) => {
+      setEngineStats((prev) => ({ ...prev, marketStreamStatus: status }));
+    });
+
+    return () => {
+      unsubTick();
+      unsubStatus();
+    };
+  }, [exchange, engineStats.watchlist]);
+
+  // Periodic Broad Market Scanner (Every 2-3s level 1 scan)
   const runMarketScan = useCallback(async () => {
     if (exchange !== 'binance') return null;
     setIsScanning(true);
@@ -494,6 +594,17 @@ export default function TradingDashboard() {
       if (res.ok) {
         const data: ScannerSummary = await res.json();
         setScannerSummary(data);
+
+        // Update Watchlist dynamically from top opportunity scores
+        if (data.candidates && data.candidates.length > 0) {
+          const topSymbols = data.candidates.slice(0, 5).map((c) => c.symbol);
+          if (topSymbols.length > 0) {
+            setEngineStats((prev) => ({ ...prev, watchlist: topSymbols }));
+            if (typeof window !== 'undefined') {
+              getBinanceStream().setWatchlist(topSymbols);
+            }
+          }
+        }
         return data;
       }
     } catch (e) {
@@ -507,180 +618,233 @@ export default function TradingDashboard() {
   useEffect(() => {
     if (exchange === 'binance') {
       runMarketScan();
-      const t = setInterval(runMarketScan, 30000);
+      const t = setInterval(runMarketScan, 3000);
       return () => clearInterval(t);
     }
   }, [exchange, runMarketScan]);
 
-  // Continuous Dynamic Multi-Asset Auto-Trading Bot Loop
+  // ==========================================
+  // ASYNCHRONOUS JEV SUPERVISOR (Runs every 5s)
+  // DOES NOT BLOCK THE FAST LOOP
+  // ==========================================
   useEffect(() => {
-    if (!isBotRunning) {
-      setBotCountdown(botIntervalSec);
-      return;
-    }
+    if (!isBotRunning || exchange !== 'binance') return;
 
-    const intervalTimer = setInterval(async () => {
-      setBotCountdown((prev) => {
-        if (prev <= 1) {
-          (async () => {
-            const currentWallet = simWalletRef.current;
-            if (currentWallet.equity <= 0.01) {
-              setIsBotRunning(false);
-              return;
-            }
+    const jevSupervisorTimer = setInterval(async () => {
+      try {
+        const targetSym = engineStats.watchlist[0] || symbol;
+        const mkt = await fetchMarketData(targetSym, timeframe);
+        if (mkt) {
+          const analysis = await runAIAnalysis(mkt);
+          if (analysis) {
+            const newState: StrategySupervisorState = {
+              marketRegime: analysis.keyIndicators.trend === 'BULLISH' ? 'BULLISH' : analysis.keyIndicators.trend === 'BEARISH' ? 'BEARISH' : 'SIDEWAYS',
+              preferredSymbols: engineStats.watchlist,
+              allowLong: analysis.action !== 'SELL',
+              allowShort: analysis.action !== 'BUY',
+              maxLeverage: analysis.confidence >= 85 ? 2 : 1,
+              risk: analysis.riskLevel,
+              minConfidence: botMinConfidence,
+              lastUpdated: Date.now(),
+              reasoning: analysis.reasoning,
+            };
+            setSupervisorState(newState);
+            supervisorStateRef.current = newState;
+          }
+        }
+      } catch (err) {
+        console.warn('JEV Supervisor background error:', err);
+      }
+    }, botJevSupervisorSec * 1000);
 
-            const timeStr = new Date().toLocaleTimeString();
+    return () => clearInterval(jevSupervisorTimer);
+  }, [isBotRunning, exchange, engineStats.watchlist, symbol, timeframe, botJevSupervisorSec, botMinConfidence, fetchMarketData]);
 
-            // 1. DYNAMIC MARKET SELECTION (Multi-asset Scanner)
-            let targetSymbol = symbol;
-            let scannerData = scannerSummary;
-            if (autoScanEnabled) {
-              const freshScan = await runMarketScan();
-              if (freshScan && freshScan.candidates.length > 0) {
-                scannerData = freshScan;
-                // Choose the candidate with highest opportunity score
-                const bestCandidate = freshScan.candidates[0];
-                targetSymbol = bestCandidate.symbol;
-              }
-            }
+  // ==========================================
+  // ULTRA FAST SIGNAL LOOP (100 ms In-Memory)
+  // ==========================================
+  useEffect(() => {
+    if (!isBotRunning || exchange !== 'binance') return;
 
-            // 2. FETCH REAL DATA FOR TARGET
-            const mkt = await fetchMarketData(targetSymbol, timeframe);
-            if (!mkt || mkt.price <= 0) {
-              setBotLogs((l) => [
-                { time: timeStr, msg: `${targetSymbol} | Market Data Unavailable - Pas geçildi.`, type: 'hold' },
-                ...l.slice(0, 29),
-              ]);
-              return;
-            }
+    const fastSignalTimer = setInterval(() => {
+      const now = Date.now();
+      signalsCountRef.current += 1;
 
-            // 3. COOLDOWN CHECK
-            const nowMs = Date.now();
-            if (nowMs - lastTradeTimeRef.current < botCooldownSec * 1000) {
-              const remainingCooldown = Math.ceil((botCooldownSec * 1000 - (nowMs - lastTradeTimeRef.current)) / 1000);
-              setBotLogs((l) => [
-                { time: timeStr, msg: `${mkt.symbol} | Fiyat: $${mkt.price.toFixed(2)} | Cooldown aktif (${remainingCooldown}s)`, type: 'hold' },
-                ...l.slice(0, 29),
-              ]);
-              return;
-            }
+      // Stale Market Data Failsafe (> 10s without ticks = paused)
+      if (now - lastTickTimeRef.current > 10000) {
+        return;
+      }
 
-            // 4. JEV DEEP ANALYSIS
-            const analysis = await runAIAnalysis(mkt);
-            if (!analysis) return;
+      const currentW = simWalletRef.current;
+      if (currentW.equity <= 0.01) {
+        setIsBotRunning(false);
+        return;
+      }
 
-            // 5. RISK ENGINE EVALUATION
-            const requestedUsdt = parseFloat((currentWallet.cash * (botTradeSizePct / 100)).toFixed(2));
-            const riskDecision = evaluateTradeRisk(
-              currentWallet,
-              mkt.symbol,
-              analysis.action,
-              analysis.confidence,
-              mkt.price,
-              requestedUsdt,
-              analysis.stopLoss,
-              analysis.targetPrice,
+      // Check Rapid Trading Protection: Max 4 trades/sec, max 60 trades/min
+      const oneSecAgo = now - 1000;
+      recentTradesCountRef.current = recentTradesCountRef.current.filter((t) => t.timestamp > oneSecAgo);
+      if (recentTradesCountRef.current.length >= 4) {
+        return; // Throttled for safety
+      }
+
+      // Evaluate signals across fast watchlist
+      const watchlist = engineStats.watchlist.length > 0 ? engineStats.watchlist : [symbol];
+
+      for (const sym of watchlist) {
+        const sig = evaluateFastSignal(sym, supervisorStateRef.current);
+        if (!sig) continue;
+
+        const prevSignal = lastSignalStateRef.current[sym] || 'HOLD';
+
+        // ONLY trade on State Transition (e.g. HOLD -> BUY, BUY -> SELL)
+        if (sig.action === prevSignal) {
+          continue; // No trade on repeated identical signal!
+        }
+
+        // Anti-duplicate execution cooldown (250 ms)
+        if (now - lastOrderTimeRef.current < botCooldownMs) {
+          continue;
+        }
+
+        // Current real price from memory stream
+        const realPrice = getBinanceStream().getLastKnownPrice(sym) || sig.indicators.ema9;
+        if (realPrice <= 0) continue;
+
+        // Evaluate Risk Engine
+        const requestedUsdt = parseFloat((currentW.cash * (botTradeSizePct / 100)).toFixed(2));
+        const riskDecision = evaluateTradeRisk(
+          currentW,
+          sym,
+          sig.action,
+          sig.confidence,
+          realPrice,
+          requestedUsdt,
+          realPrice * 0.98,
+          realPrice * 1.035,
+          {
+            ...DEFAULT_RISK_LIMITS,
+            minConfidence: botMinConfidence,
+            maxPositionSizePercent: botTradeSizePct,
+          }
+        );
+
+        const latencyMs = Date.now() - sig.timestamp;
+        const timeStr = new Date().toLocaleTimeString();
+
+        // Update active target in stats
+        setEngineStats((prev) => ({
+          ...prev,
+          activeTarget: {
+            symbol: sym,
+            mode: riskDecision.marketType,
+            action: sig.action,
+            confidence: sig.confidence,
+            price: realPrice,
+            suggestedUsdt: riskDecision.adjustedAmountUsdt,
+            leverage: riskDecision.leverage,
+          },
+          engineLatencyMs: latencyMs,
+        }));
+
+        // Execute Virtual Order on Signal State Change
+        if (sig.action === 'BUY' && riskDecision.permitted) {
+          // ONE_POSITION_PER_SYMBOL Protection
+          const alreadyHasPos = currentW.positions.some((p) => p.symbol === sym && p.quantity > 0);
+          if (alreadyHasPos) {
+            lastSignalStateRef.current[sym] = 'BUY';
+            continue;
+          }
+
+          const buyRes = executeSimulationBuy(
+            currentW,
+            sym,
+            riskDecision.adjustedAmountUsdt,
+            realPrice,
+            'JEV_BOT',
+            sig.confidence
+          );
+
+          if (buyRes.success && buyRes.trade) {
+            setSimWallet(buyRes.wallet);
+            lastOrderTimeRef.current = Date.now();
+            lastSignalStateRef.current[sym] = 'BUY';
+            recentTradesCountRef.current.push({ timestamp: Date.now() });
+
+            setBotLogs((l) => [
               {
-                ...DEFAULT_RISK_LIMITS,
-                minConfidence: botMinConfidence,
-                maxPositionSizePercent: botTradeSizePct,
-              }
+                time: timeStr,
+                msg: `${sym} | BUY (${sig.confidence}%) | $${realPrice.toFixed(2)} | Boyut: ${riskDecision.adjustedAmountUsdt.toFixed(2)} USDT | Gecikme: ${latencyMs}ms | ${sig.reason}`,
+                type: 'buy',
+              },
+              ...l.slice(0, 29),
+            ]);
+            break; // One trade per tick cycle
+          }
+        } else if (sig.action === 'SELL' && riskDecision.permitted) {
+          const openPos = currentW.positions.find((p) => p.symbol === sym);
+          if (openPos && openPos.quantity > 0) {
+            const sellRes = executeSimulationSell(
+              currentW,
+              sym,
+              openPos.quantity,
+              realPrice,
+              'JEV_BOT',
+              sig.confidence
             );
 
-            // Update Current Target Display
-            setCurrentTarget({
-              symbol: mkt.symbol,
-              mode: riskDecision.marketType,
-              action: analysis.action,
-              confidence: analysis.confidence,
-              price: mkt.price,
-              suggestedUsdt: riskDecision.adjustedAmountUsdt,
-              leverage: riskDecision.leverage,
-              reason: analysis.reasoning,
-            });
+            if (sellRes.success && sellRes.trade) {
+              setSimWallet(sellRes.wallet);
+              lastOrderTimeRef.current = Date.now();
+              lastSignalStateRef.current[sym] = 'SELL';
+              recentTradesCountRef.current.push({ timestamp: Date.now() });
 
-            const priceFormatted = mkt.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-            // 6. EXECUTION VIA VIRTUAL SIMULATION WALLET
-            if (analysis.action === 'BUY' && riskDecision.permitted) {
-              const buyRes = executeSimulationBuy(
-                currentWallet,
-                mkt.symbol,
-                riskDecision.adjustedAmountUsdt,
-                mkt.price,
-                'JEV_BOT',
-                analysis.confidence
-              );
-
-              if (buyRes.success && buyRes.trade) {
-                setSimWallet(buyRes.wallet);
-                lastTradeTimeRef.current = Date.now();
-                setBotLogs((l) => [
-                  {
-                    time: timeStr,
-                    msg: `${mkt.symbol} | Fiyat: $${priceFormatted} | JEV: BUY | Güven: %${analysis.confidence} | Emir: ${riskDecision.adjustedAmountUsdt.toFixed(2)} USDT | Miktar: ${buyRes.trade?.quantity} | Status: FILLED`,
-                    type: 'buy',
-                  },
-                  ...l.slice(0, 29),
-                ]);
-              }
-            } else if (analysis.action === 'SELL' && riskDecision.permitted) {
-              const openPos = currentWallet.positions.find((p) => p.symbol === mkt.symbol);
-              if (openPos && openPos.quantity > 0) {
-                const sellRes = executeSimulationSell(
-                  currentWallet,
-                  mkt.symbol,
-                  openPos.quantity,
-                  mkt.price,
-                  'JEV_BOT',
-                  analysis.confidence
-                );
-
-                if (sellRes.success && sellRes.trade) {
-                  setSimWallet(sellRes.wallet);
-                  lastTradeTimeRef.current = Date.now();
-                  const pnl = sellRes.trade.realizedPnL || 0;
-                  setBotLogs((l) => [
-                    {
-                      time: timeStr,
-                      msg: `${mkt.symbol} | Fiyat: $${priceFormatted} | JEV: SELL | Güven: %${analysis.confidence} | Realized P&L: ${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)} USDT | Status: FILLED`,
-                      type: 'sell',
-                    },
-                    ...l.slice(0, 29),
-                  ]);
-                }
-              }
-            } else {
+              const pnl = sellRes.trade.realizedPnL || 0;
               setBotLogs((l) => [
                 {
                   time: timeStr,
-                  msg: `${mkt.symbol} | Fiyat: $${priceFormatted} | JEV: ${analysis.action} | Güven: %${analysis.confidence} | ${riskDecision.permitted ? 'Beklemede' : riskDecision.reason}`,
-                  type: 'hold',
+                  msg: `${sym} | SELL (${sig.confidence}%) | $${realPrice.toFixed(2)} | Realized P&L: USDT ${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)} | Gecikme: ${latencyMs}ms`,
+                  type: 'sell',
                 },
                 ...l.slice(0, 29),
               ]);
+              break;
             }
-          })();
-          return botIntervalSec;
+          }
+        } else {
+          lastSignalStateRef.current[sym] = 'HOLD';
         }
-        return prev - 1;
-      });
-    }, 1000);
+      }
+    }, botFastLoopMs);
 
-    return () => clearInterval(intervalTimer);
+    return () => clearInterval(fastSignalTimer);
   }, [
     isBotRunning,
-    botIntervalSec,
+    exchange,
+    botFastLoopMs,
+    botCooldownMs,
     botMinConfidence,
     botTradeSizePct,
-    botCooldownSec,
+    engineStats.watchlist,
     symbol,
-    timeframe,
-    autoScanEnabled,
-    scannerSummary,
-    runMarketScan,
-    fetchMarketData,
   ]);
+
+  // Decoupled UI Throttle (250 ms stats push to prevent re-render flooding)
+  useEffect(() => {
+    if (!isBotRunning || exchange !== 'binance') return;
+
+    const uiThrottleTimer = setInterval(() => {
+      setEngineStats((prev) => ({
+        ...prev,
+        ticksReceived: ticksCountRef.current,
+        signalsProcessed: signalsCountRef.current,
+        tradesCount: simWalletRef.current.trades.length,
+        lastTickTimestamp: lastTickTimeRef.current,
+      }));
+    }, 250);
+
+    return () => clearInterval(uiThrottleTimer);
+  }, [isBotRunning, exchange]);
 
   const currencySymbol = exchange === 'nasdaq' ? '$' : 'USDT ';
   const currentSymbols = exchange === 'nasdaq' ? NASDAQ_SYMBOLS : BINANCE_SYMBOLS;
@@ -854,7 +1018,7 @@ export default function TradingDashboard() {
               </div>
               <div className="flex items-center gap-2">
                 <span className={`text-sm font-bold ${isBotRunning ? 'text-emerald-400 animate-pulse' : 'text-slate-400'}`}>
-                  {isBotRunning ? `BOT AKTİF (${botCountdown}s)` : 'DURDURULDU'}
+                  {isBotRunning ? `BOT AKTİF (${botFastLoopMs}ms / ${engineStats.marketStreamStatus})` : 'DURDURULDU'}
                 </span>
               </div>
               <div className="text-[11px] text-slate-400 mt-1">
@@ -1460,35 +1624,76 @@ export default function TradingDashboard() {
             </div>
           )}
 
-          {/* Continuous Auto-Trading Bot Panel */}
+          {/* Continuous Auto-Trading Bot Panel (Ultra Fast Event-Driven) */}
           <div className="bg-[#121824] border border-cyan-500/30 rounded-2xl p-5 shadow-xl relative overflow-hidden flex flex-col gap-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Bot className="w-4 h-4 text-cyan-400 animate-pulse" />
-                <span className="font-bold text-sm text-white">Sürekli Al-Sat Botu</span>
+                <span className="font-bold text-sm text-white">Ultra Hızlı Event-Driven Bot</span>
               </div>
-              <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${isBotRunning ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-slate-800 text-slate-400'}`}>
-                {isBotRunning ? 'ÇALIŞIYOR' : 'DURDU'}
-              </span>
+              <div className="flex items-center gap-2">
+                <span className={`text-[10px] font-mono px-2 py-0.5 rounded border ${engineStats.marketStreamStatus === 'CONNECTED' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' : 'bg-amber-500/20 text-amber-300 border-amber-500/30'}`}>
+                  WS: {engineStats.marketStreamStatus}
+                </span>
+                <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${isBotRunning ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-slate-800 text-slate-400'}`}>
+                  {isBotRunning ? 'AKTİF (100ms)' : 'DURDURULDU'}
+                </span>
+              </div>
+            </div>
+
+            {/* Live Engine Diagnostic Stats Panel */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs bg-slate-950/80 p-3 rounded-xl border border-slate-800 font-mono">
+              <div>
+                <span className="text-slate-400 block text-[9px] uppercase">Gelen Tick</span>
+                <span className="text-emerald-400 font-bold">{engineStats.ticksReceived.toLocaleString()}</span>
+              </div>
+              <div>
+                <span className="text-slate-400 block text-[9px] uppercase">Sinyal / Hız</span>
+                <span className="text-cyan-400 font-bold">{botFastLoopMs}ms döngü</span>
+              </div>
+              <div>
+                <span className="text-slate-400 block text-[9px] uppercase">Simülasyon Gecikme</span>
+                <span className="text-amber-300 font-bold">{engineStats.engineLatencyMs} ms</span>
+              </div>
+              <div>
+                <span className="text-slate-400 block text-[9px] uppercase">JEV Denetçi</span>
+                <span className="text-indigo-400 font-bold">{botJevSupervisorSec}s async</span>
+              </div>
             </div>
 
             <p className="text-xs text-slate-300">
-              Bot her <strong>{botIntervalSec} saniyede bir</strong> gerçek Binance piyasa verisini {aiEngine.toUpperCase()} modeline gönderir, %{botMinConfidence} üzeri güvenli sinyallerde sanal cüzdandan işlem açar.
+              WebSocket veri akışıyla gelen her fiyat tick&apos;inde <strong>{botFastLoopMs} ms in-memory sinyal motoru</strong> çalışır; JEV modeli asenkron olarak strateji rejimini denetler.
             </p>
 
             <div className="grid grid-cols-2 gap-2 text-xs">
               <div>
-                <label className="text-slate-400 block mb-1">Döngü Süresi</label>
+                <label className="text-slate-400 block mb-1">Hızlı Sinyal Döngüsü</label>
                 <select
-                  value={botIntervalSec}
-                  onChange={(e) => setBotIntervalSec(Number(e.target.value))}
+                  value={botFastLoopMs}
+                  onChange={(e) => setBotFastLoopMs(Number(e.target.value))}
                   disabled={isBotRunning}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white font-mono"
                 >
-                  <option value={15}>15 Saniye (Varsayılan)</option>
+                  <option value={25}>25 ms (Ultra Yüksek Hız)</option>
+                  <option value={50}>50 ms</option>
+                  <option value={100}>100 ms (Varsayılan)</option>
+                  <option value={250}>250 ms</option>
+                  <option value={500}>500 ms</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-slate-400 block mb-1">JEV Denetçi Aralığı</label>
+                <select
+                  value={botJevSupervisorSec}
+                  onChange={(e) => setBotJevSupervisorSec(Number(e.target.value))}
+                  disabled={isBotRunning}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white font-mono"
+                >
+                  <option value={2}>2 Saniye</option>
+                  <option value={5}>5 Saniye (Varsayılan)</option>
+                  <option value={10}>10 Saniye</option>
                   <option value={30}>30 Saniye</option>
-                  <option value={60}>60 Saniye</option>
-                  <option value={300}>5 Dakika</option>
                 </select>
               </div>
 
@@ -1520,19 +1725,6 @@ export default function TradingDashboard() {
                   <option value={25}>%25 Nakit</option>
                 </select>
               </div>
-
-              <div>
-                <label className="text-slate-400 block mb-1">AI Motoru</label>
-                <select
-                  value={aiEngine}
-                  onChange={(e) => setAiEngine(e.target.value as 'gemini' | 'jev')}
-                  disabled={isBotRunning}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white"
-                >
-                  <option value="jev">⚡ TypeSafe Jev</option>
-                  <option value="gemini">🧠 Gemini 1.5</option>
-                </select>
-              </div>
             </div>
 
             <button
@@ -1554,12 +1746,12 @@ export default function TradingDashboard() {
               {isBotRunning ? (
                 <>
                   <Square className="w-3.5 h-3.5 fill-current" />
-                  <span>Botu Durdur ({botCountdown}s kaldı)</span>
+                  <span>Botu Durdur (Event-Driven Loop)</span>
                 </>
               ) : (
                 <>
                   <Play className="w-3.5 h-3.5 fill-current" />
-                  <span>Sürekli Otomatik Al-Sat Başlat</span>
+                  <span>Ultra Hızlı Botu Başlat (100ms Stream)</span>
                 </>
               )}
             </button>
@@ -1567,7 +1759,7 @@ export default function TradingDashboard() {
             {/* Real-time Bot Log Stream */}
             <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 flex flex-col gap-1.5 max-h-48 overflow-y-auto font-mono text-[11px]">
               <span className="text-slate-400 text-[10px] uppercase font-bold pb-1 border-b border-slate-800">
-                Canlı Bot Log Akışı (Son Değerlendirmeler)
+                Canlı Olay Günlüğü (Sinyal Değişimleri & İşlemler)
               </span>
               {botLogs.length > 0 ? (
                 botLogs.map((log, i) => (
@@ -1588,7 +1780,7 @@ export default function TradingDashboard() {
                 ))
               ) : (
                 <span className="text-slate-400 text-center py-2">
-                  Bot başlatıldığında gerçek piyasa analizleri buraya akacaktır.
+                  Bot başlatıldığında sinyal geçişleri ve emirler buraya anlık akacaktır.
                 </span>
               )}
             </div>

@@ -3,6 +3,7 @@ import { SimulationWallet, SimulationPosition, SimulationTrade } from '@/types/t
 export const SIMULATION_WALLET_STORAGE_KEY = 'quant_jev_simulation_wallet_v1';
 export const INITIAL_SIMULATION_BALANCE = 10.0;
 export const TRADING_FEE_RATE = 0.001; // 0.1%
+export const SIMULATED_SLIPPAGE_RATE = 0.00025; // 0.025% default slippage
 
 export function createDefaultWallet(): SimulationWallet {
   const now = Date.now();
@@ -119,7 +120,9 @@ export function executeSimulationBuy(
 
   const fee = parseFloat((usdtAmount * TRADING_FEE_RATE).toFixed(6));
   const effectiveValue = usdtAmount - fee;
-  const quantity = parseFloat((effectiveValue / currentPrice).toFixed(8));
+  // Apply realistic simulation slippage (+0.025% higher on buy)
+  const execPrice = parseFloat((currentPrice * (1 + SIMULATED_SLIPPAGE_RATE)).toFixed(4));
+  const quantity = parseFloat((effectiveValue / execPrice).toFixed(8));
 
   if (quantity <= 0) {
     return { success: false, wallet, error: 'Hesaplanan miktar çok küçük.' };
@@ -133,25 +136,25 @@ export function executeSimulationBuy(
   if (existingIndex >= 0) {
     const prev = newPositions[existingIndex];
     const totalQty = prev.quantity + quantity;
-    const totalCost = (prev.quantity * prev.averageEntryPrice) + (quantity * currentPrice);
+    const totalCost = (prev.quantity * prev.averageEntryPrice) + (quantity * execPrice);
     const newAvg = totalCost / totalQty;
 
     newPositions[existingIndex] = {
       symbol,
       quantity: parseFloat(totalQty.toFixed(8)),
       averageEntryPrice: parseFloat(newAvg.toFixed(4)),
-      currentPrice,
-      marketValue: parseFloat((totalQty * currentPrice).toFixed(4)),
-      unrealizedPnL: parseFloat(((currentPrice - newAvg) * totalQty).toFixed(4)),
-      unrealizedPnLPercent: parseFloat((((currentPrice / newAvg) - 1) * 100).toFixed(2)),
+      currentPrice: execPrice,
+      marketValue: parseFloat((totalQty * execPrice).toFixed(4)),
+      unrealizedPnL: parseFloat(((execPrice - newAvg) * totalQty).toFixed(4)),
+      unrealizedPnLPercent: parseFloat((((execPrice / newAvg) - 1) * 100).toFixed(2)),
     };
   } else {
     newPositions.push({
       symbol,
       quantity,
-      averageEntryPrice: currentPrice,
-      currentPrice,
-      marketValue: parseFloat((quantity * currentPrice).toFixed(4)),
+      averageEntryPrice: execPrice,
+      currentPrice: execPrice,
+      marketValue: parseFloat((quantity * execPrice).toFixed(4)),
       unrealizedPnL: 0,
       unrealizedPnLPercent: 0,
     });
@@ -164,7 +167,7 @@ export function executeSimulationBuy(
     time: new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
     symbol,
     side: 'BUY',
-    price: currentPrice,
+    price: execPrice,
     quantity,
     usdtValue: usdtAmount,
     fee,
@@ -210,7 +213,9 @@ export function executeSimulationSell(
     return { success: false, wallet, error: 'Satılacak miktar geçersiz.' };
   }
 
-  const grossProceeds = actualQty * currentPrice;
+  // Apply realistic simulation slippage (-0.025% lower on sell)
+  const execPrice = parseFloat((currentPrice * (1 - SIMULATED_SLIPPAGE_RATE)).toFixed(4));
+  const grossProceeds = actualQty * execPrice;
   const fee = parseFloat((grossProceeds * TRADING_FEE_RATE).toFixed(6));
   const netProceeds = parseFloat((grossProceeds - fee).toFixed(4));
   const costBasis = actualQty * pos.averageEntryPrice;
@@ -226,10 +231,10 @@ export function executeSimulationSell(
     newPositions[existingIndex] = {
       ...pos,
       quantity: remainingQty,
-      currentPrice,
-      marketValue: parseFloat((remainingQty * currentPrice).toFixed(4)),
-      unrealizedPnL: parseFloat(((currentPrice - pos.averageEntryPrice) * remainingQty).toFixed(4)),
-      unrealizedPnLPercent: parseFloat((((currentPrice / pos.averageEntryPrice) - 1) * 100).toFixed(2)),
+      currentPrice: execPrice,
+      marketValue: parseFloat((remainingQty * execPrice).toFixed(4)),
+      unrealizedPnL: parseFloat(((execPrice - pos.averageEntryPrice) * remainingQty).toFixed(4)),
+      unrealizedPnLPercent: parseFloat((((execPrice / pos.averageEntryPrice) - 1) * 100).toFixed(2)),
     };
   }
 
@@ -240,7 +245,7 @@ export function executeSimulationSell(
     time: new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
     symbol,
     side: 'SELL',
-    price: currentPrice,
+    price: execPrice,
     quantity: actualQty,
     usdtValue: parseFloat(grossProceeds.toFixed(4)),
     fee,
