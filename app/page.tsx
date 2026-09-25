@@ -668,8 +668,6 @@ export default function TradingDashboard() {
       setEngineStats((prev) => ({ ...prev, marketStreamStatus: status }));
       if (status === 'DISCONNECTED') {
         pauseBot('WEBSOCKET_DISCONNECTED');
-      } else if (status === 'RECONNECTING') {
-        pauseBot('WEBSOCKET_RECONNECTING');
       } else if (status === 'CONNECTED' && isExecutionPausedRef.current && (pauseReasonRef.current === 'WEBSOCKET_DISCONNECTED' || pauseReasonRef.current === 'WEBSOCKET_RECONNECTING')) {
         resumeBot();
       }

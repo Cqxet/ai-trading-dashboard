@@ -33,13 +33,8 @@ class BinanceStreamManager {
   public setWatchlist(newSymbols: string[]): void {
     if (!newSymbols || newSymbols.length === 0) return;
     const formatted = newSymbols.map((s) => s.toUpperCase().trim());
-    const set = new Set(formatted);
-    // Check if changed
-    if (set.size === this.symbols.size && Array.from(set).every((s) => this.symbols.has(s))) {
-      return;
-    }
-    this.symbols = set;
-    this.reconnect();
+    // Directly update local filter set without reconnecting socket!
+    this.symbols = new Set(formatted);
   }
 
   public start(): void {
@@ -103,12 +98,10 @@ class BinanceStreamManager {
     this.isConnecting = true;
 
     try {
-      const streams = Array.from(this.symbols)
-        .map((s) => `${s.toLowerCase()}@ticker`)
-        .join('/');
-
-      this.activeStreams = streams;
-      const url = `wss://stream.binance.com:9443/stream?streams=${streams}`;
+      // Live Multi-Asset Ticker Stream (Single WebSocket connection)
+      // wss://stream.binance.com:9443/ws/!ticker@arr streams real-time 24h ticker updates for ALL Binance USDT pairs
+      // without needing to close and reconnect on watchlist changes!
+      const url = `wss://stream.binance.com:9443/ws/!ticker@arr`;
 
       const socket = new WebSocket(url);
       this.ws = socket;
@@ -122,28 +115,34 @@ class BinanceStreamManager {
       socket.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data);
-          const data = payload.data || payload;
-          if (data && data.s && data.c) {
-            const symbol = data.s.toUpperCase();
-            const price = parseFloat(data.c);
-            const bid = data.b ? parseFloat(data.b) : price;
-            const ask = data.a ? parseFloat(data.a) : price;
-            const volume24h = data.q ? parseFloat(data.q) : 0;
-            const change24h = data.P ? parseFloat(data.P) : 0;
-            const timestamp = data.E || Date.now();
+          const list = Array.isArray(payload) ? payload : [payload];
 
-            this.lastPrices.set(symbol, price);
+          for (const data of list) {
+            if (data && data.s && data.c) {
+              const symbol = data.s.toUpperCase();
+              // Filter to our watchlist or common USDT pairs
+              if (this.symbols.has(symbol) || this.symbols.size === 0) {
+                const price = parseFloat(data.c);
+                const bid = data.b ? parseFloat(data.b) : price;
+                const ask = data.a ? parseFloat(data.a) : price;
+                const volume24h = data.q ? parseFloat(data.q) : 0;
+                const change24h = data.P ? parseFloat(data.P) : 0;
+                const timestamp = data.E || Date.now();
 
-            this.notifyTick({
-              symbol,
-              price,
-              bid,
-              ask,
-              spread: Math.max(0, ask - bid),
-              volume24h,
-              change24h,
-              timestamp,
-            });
+                this.lastPrices.set(symbol, price);
+
+                this.notifyTick({
+                  symbol,
+                  price,
+                  bid,
+                  ask,
+                  spread: Math.max(0, ask - bid),
+                  volume24h,
+                  change24h,
+                  timestamp,
+                });
+              }
+            }
           }
         } catch (err) {
           // ignore parse errors
