@@ -40,7 +40,7 @@ export interface AccountInfo {
   buyingPower: number;
   currency: string;
   isDemo: boolean;
-  status: 'CONNECTED' | 'API_KEY_INVALID' | 'UNAVAILABLE';
+  status: 'CONNECTED' | 'API_KEY_INVALID' | 'UNAVAILABLE' | 'RESTRICTED_LOCATION';
   statusMessage: string;
   positions: Position[];
   realizedPnL?: number;

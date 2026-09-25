@@ -336,7 +336,10 @@ export default function TradingDashboard() {
   const netPnL = initialEquity ? currentEquity - initialEquity : 0;
   const netPnLPct = initialEquity && initialEquity > 0 ? (netPnL / initialEquity) * 100 : 0;
 
-  const isTradingDisabled = account?.status === 'API_KEY_INVALID' || marketData === null;
+  const isTradingDisabled =
+    account?.status === 'API_KEY_INVALID' ||
+    account?.status === 'RESTRICTED_LOCATION' ||
+    marketData === null;
 
   return (
     <div className="min-h-screen bg-[#0b0e14] text-slate-100 flex flex-col font-sans selection:bg-indigo-500/30">
@@ -433,8 +436,12 @@ export default function TradingDashboard() {
                 <Wallet className="w-3.5 h-3.5 text-blue-400" />
               </div>
               <div className="text-xl font-bold tracking-tight text-white flex items-baseline justify-between">
-                <span>{account ? `${currencySymbol}${account.equity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '...'}</span>
-                {exchange === 'binance' && (
+                {account?.status === 'RESTRICTED_LOCATION' ? (
+                  <span className="text-sm font-semibold text-amber-400">UNAVAILABLE</span>
+                ) : (
+                  <span>{account ? `${currencySymbol}${account.equity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '...'}</span>
+                )}
+                {exchange === 'binance' && account?.status !== 'RESTRICTED_LOCATION' && (
                   <button
                     onClick={handleResetBinanceBalance}
                     title="Bakiyeyi $10'a Sıfırla"
@@ -444,9 +451,15 @@ export default function TradingDashboard() {
                   </button>
                 )}
               </div>
-              <div className="text-[11px] text-emerald-400 mt-1 flex items-center gap-1">
-                <ShieldCheck className="w-3 h-3" />
-                <span>{account?.isDemo ? 'Sanal Sandbox Modu' : 'Canlı Testnet'}</span>
+              <div className="text-[11px] mt-1 flex items-center gap-1">
+                {account?.status === 'RESTRICTED_LOCATION' ? (
+                  <span className="text-amber-400 font-medium">Binance Testnet trading unavailable</span>
+                ) : (
+                  <>
+                    <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                    <span className="text-emerald-400">{account?.isDemo ? 'Sanal Sandbox Modu' : 'Canlı Testnet'}</span>
+                  </>
+                )}
               </div>
             </div>
 
@@ -458,9 +471,17 @@ export default function TradingDashboard() {
                 <DollarSign className="w-3.5 h-3.5 text-emerald-400" />
               </div>
               <div className="text-xl font-bold tracking-tight text-white">
-                {account ? `${currencySymbol}${account.buyingPower.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '...'}
+                {account?.status === 'RESTRICTED_LOCATION' ? (
+                  <span className="text-sm font-semibold text-amber-400">UNAVAILABLE</span>
+                ) : account ? (
+                  `${currencySymbol}${account.buyingPower.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                ) : (
+                  '...'
+                )}
               </div>
-              <div className="text-[11px] text-slate-400 mt-1">Kullanılabilir Sanal Nakit</div>
+              <div className="text-[11px] text-slate-400 mt-1">
+                {account?.status === 'RESTRICTED_LOCATION' ? 'Kullanılamıyor (Bölgesel Kısıtlama)' : 'Kullanılabilir Sanal Nakit'}
+              </div>
             </div>
 
             <div className="bg-[#121824] border border-slate-800/80 rounded-xl p-4 flex flex-col justify-between">

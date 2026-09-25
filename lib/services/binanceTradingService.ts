@@ -95,8 +95,27 @@ export async function getBinanceTradingAccount(apiKey?: string, secretKey?: stri
           orders: demoBinanceOrders,
         };
       } else {
-        const errJson = await res.json().catch(() => ({}));
-        console.error(`[TRADING][BINANCE_TESTNET] API Error: ${errJson.msg || res.statusText}`);
+        const errorText = await res.text();
+        const isRestricted = res.status === 451 || errorText.toLowerCase().includes('restricted location') || errorText.toLowerCase().includes('eligibility');
+
+        if (isRestricted) {
+          console.warn(`[TRADING][BINANCE_TESTNET] Regional restriction detected from hosting IP (HTTP ${res.status}): ${errorText}`);
+          return {
+            accountType: 'BINANCE_TESTNET',
+            equity: 0,
+            cash: 0,
+            buyingPower: 0,
+            currency: 'USDT',
+            isDemo: false,
+            status: 'RESTRICTED_LOCATION',
+            statusMessage: 'Binance Testnet trading unavailable (Bölgesel Kısıtlama: Vercel sunucu konumu Binance Testnet tarafından kısıtlanmıştır)',
+            positions: [],
+            unrealizedPnL: 0,
+            orders: [],
+          };
+        }
+
+        console.error(`[TRADING][BINANCE_TESTNET] API Error [HTTP ${res.status}]: ${errorText}`);
         return {
           accountType: 'BINANCE_TESTNET',
           equity: 0,
@@ -105,7 +124,7 @@ export async function getBinanceTradingAccount(apiKey?: string, secretKey?: stri
           currency: 'USDT',
           isDemo: false,
           status: 'API_KEY_INVALID',
-          statusMessage: `Binance Testnet API Hatası: ${errJson.msg || 'Geçersiz API Anahtarı'}. Alım/satım devre dışı.`,
+          statusMessage: `Binance Testnet API Hatası: ${errorText || 'Geçersiz API Anahtarı'}. Alım/satım devre dışı.`,
           positions: [],
           unrealizedPnL: 0,
           orders: [],
@@ -219,8 +238,12 @@ export async function executeBinanceTradingOrder(
         console.log(`[TRADING][BINANCE_TESTNET] Order placed: ${side} ${quantity} ${formattedSymbol} at ${tradePrice}`);
         return order;
       } else {
-        const errJson = await res.json().catch(() => ({}));
-        throw new Error(`Binance Testnet Emir Hatası: ${errJson.msg || res.statusText}`);
+        const errorText = await res.text();
+        const isRestricted = res.status === 451 || errorText.toLowerCase().includes('restricted location') || errorText.toLowerCase().includes('eligibility');
+        if (isRestricted) {
+          throw new Error('Binance Testnet trading unavailable (Hosting bölgesi Binance Testnet uygunluk kısıtlamasına takıldı)');
+        }
+        throw new Error(`Binance Testnet Emir Hatası: ${errorText || res.statusText}`);
       }
     } catch (err: any) {
       console.error('[TRADING][BINANCE_TESTNET] Order failed:', err.message);
