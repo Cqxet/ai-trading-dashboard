@@ -11,19 +11,19 @@ export interface RiskDecision {
 }
 
 export interface RiskLimits {
-  maxOpenPositions: number; // default: 3 (max 5)
-  maxPositionSizePercent: number; // default: 10% (max 20%)
-  maxCombinedExposurePercent: number; // default: 60%
+  maxOpenPositions: number; // default: 6
+  maxPositionSizePercent: number; // default: 15%
+  maxCombinedExposurePercent: number; // default: 85%
   maxAllowedLeverage: number; // default: 3x (max 5x)
-  minConfidence: number; // default: 70%
+  minConfidence: number; // default: 60%
 }
 
 export const DEFAULT_RISK_LIMITS: RiskLimits = {
-  maxOpenPositions: 3,
-  maxPositionSizePercent: 10,
-  maxCombinedExposurePercent: 60,
+  maxOpenPositions: 6,
+  maxPositionSizePercent: 15,
+  maxCombinedExposurePercent: 85,
   maxAllowedLeverage: 3,
-  minConfidence: 70,
+  minConfidence: 60,
 };
 
 export function evaluateTradeRisk(
@@ -91,9 +91,12 @@ export function evaluateTradeRisk(
     };
   }
 
-  // 4. Maximum Position Size Limit (Default: max 10% of total equity)
+  // 4. Maximum Position Size Limit (Default: max 15% of total equity)
   const maxAllowedUsdt = (wallet.equity * limits.maxPositionSizePercent) / 100;
-  const clampedAmount = Math.min(requestedAmountUsdt, maxAllowedUsdt, wallet.cash);
+  // Ensure we can trade with small balances: minimum trade size 0.50 USDT if cash allows
+  const minimumViableTrade = Math.min(1.0, Math.max(0.5, wallet.cash * 0.15));
+  const effectiveTradeUsdt = Math.max(requestedAmountUsdt, minimumViableTrade);
+  const clampedAmount = Math.min(effectiveTradeUsdt, maxAllowedUsdt, wallet.cash);
 
   if (clampedAmount < 0.10) {
     return {

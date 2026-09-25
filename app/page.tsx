@@ -128,8 +128,8 @@ export default function TradingDashboard() {
   const [isBotRunning, setIsBotRunning] = useState<boolean>(false);
   const [botFastLoopMs, setBotFastLoopMs] = useState<number>(100); // 100 ms ultra-fast signal loop
   const [botJevSupervisorSec, setBotJevSupervisorSec] = useState<number>(5); // 5s async supervisor
-  const [botMinConfidence, setBotMinConfidence] = useState<number>(70);
-  const [botTradeSizePct, setBotTradeSizePct] = useState<number>(10);
+  const [botMinConfidence, setBotMinConfidence] = useState<number>(60);
+  const [botTradeSizePct, setBotTradeSizePct] = useState<number>(15);
   const [botCooldownMs, setBotCooldownMs] = useState<number>(250); // 250 ms anti-duplicate order cooldown
   const [botLogs, setBotLogs] = useState<{ time: string; msg: string; type: 'info' | 'buy' | 'sell' | 'hold' }[]>([]);
   const [supervisorState, setSupervisorState] = useState<StrategySupervisorState | null>(null);
@@ -627,22 +627,26 @@ export default function TradingDashboard() {
           return prev;
         });
 
-        // Fast Exit Check on tick arrival (Liquidation / Stop-Loss / Take-Profit)
+        // Fast Exit Check on tick arrival (Micro-Scalping TP / Trailing Stop / Stop-Loss)
         const currentW = simWalletRef.current;
         const openPos = currentW.positions.find((p) => p.symbol === tick.symbol);
         if (openPos && openPos.quantity > 0) {
           const uPnLPct = ((tick.price / openPos.averageEntryPrice) - 1) * 100;
-          // Fast Stop-Loss (-2.0%) or Fast Take-Profit (+3.5%)
-          if (uPnLPct <= -2.0 || uPnLPct >= 3.5) {
-            const isStop = uPnLPct <= -2.0;
+          // Ultra-Responsive Scalping Exit:
+          // Take-Profit: +1.2% (Quick turnover so bot can buy again)
+          // Stop-Loss: -1.8%
+          if (uPnLPct <= -1.8 || uPnLPct >= 1.2) {
+            const isStop = uPnLPct <= -1.8;
             const sellRes = executeSimulationSell(currentW, tick.symbol, openPos.quantity, tick.price, 'JEV_BOT');
             if (sellRes.success && sellRes.trade) {
               simWalletRef.current = sellRes.wallet;
               setSimWallet(sellRes.wallet);
+              // Clear signal state so this symbol can be bought again on next fresh dip
+              delete lastSignalStateRef.current[tick.symbol];
               const pnl = sellRes.trade.realizedPnL || 0;
               const logMsg = isStop
-                ? `${tick.symbol} | STOP LOSS TETIKLENDI (%${uPnLPct.toFixed(2)}) | Realized P&L: USDT ${pnl.toFixed(4)}`
-                : `${tick.symbol} | TAKE PROFIT TETIKLENDI (+%${uPnLPct.toFixed(2)}) | Realized P&L: USDT ${pnl.toFixed(4)}`;
+                ? `${tick.symbol} | STOP LOSS TETIKLENDI (%${uPnLPct.toFixed(2)}) | Net P&L: USDT ${pnl.toFixed(4)}`
+                : `${tick.symbol} | KAR AL (TAKE PROFIT) (%+${uPnLPct.toFixed(2)}) | Net P&L: USDT ${pnl.toFixed(4)}`;
               setBotLogs((l) => [
                 { time: new Date().toLocaleTimeString(), msg: logMsg, type: isStop ? 'sell' : 'buy' },
                 ...l.slice(0, 29),
@@ -856,7 +860,8 @@ export default function TradingDashboard() {
 
             // Execute Virtual Order on Signal State Change
             if (sig.action === 'BUY' && riskDecision.permitted) {
-              // ONE_POSITION_PER_SYMBOL Protection
+              // ONE_POSITION_PER_SYMBOL Protection:
+              // Only block if already held; but if not held, allow fresh BUY
               const alreadyHasPos = currentW.positions.some((p) => p.symbol === sym && p.quantity > 0);
               if (alreadyHasPos) {
                 lastSignalStateRef.current[sym] = 'BUY';
@@ -882,7 +887,7 @@ export default function TradingDashboard() {
                 setBotLogs((l) => [
                   {
                     time: timeStr,
-                    msg: `${sym} | BUY (${sig.confidence}%) | $${realPrice.toFixed(2)} | Boyut: ${riskDecision.adjustedAmountUsdt.toFixed(2)} USDT | Gecikme: ${latencyMs}ms | ${sig.reason}`,
+                    msg: `${sym} | ALIM (BUY ${sig.confidence}%) | $${realPrice.toFixed(2)} | Komisyon: USDT ${buyRes.trade?.fee.toFixed(4)} | Boyut: ${riskDecision.adjustedAmountUsdt.toFixed(2)} USDT`,
                     type: 'buy',
                   },
                   ...l.slice(0, 29),
@@ -905,14 +910,15 @@ export default function TradingDashboard() {
                   simWalletRef.current = sellRes.wallet;
                   setSimWallet(sellRes.wallet);
                   lastOrderTimeRef.current = Date.now();
-                  lastSignalStateRef.current[sym] = 'SELL';
+                  // Reset signal state to allow re-entry on new signal
+                  delete lastSignalStateRef.current[sym];
                   recentTradesCountRef.current.push({ timestamp: Date.now() });
 
                   const pnl = sellRes.trade.realizedPnL || 0;
                   setBotLogs((l) => [
                     {
                       time: timeStr,
-                      msg: `${sym} | SELL (${sig.confidence}%) | $${realPrice.toFixed(2)} | Realized P&L: USDT ${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)} | Gecikme: ${latencyMs}ms`,
+                      msg: `${sym} | SATIM (SELL ${sig.confidence}%) | $${realPrice.toFixed(2)} | Komisyon: USDT ${sellRes.trade?.fee.toFixed(4)} | Net P&L: USDT ${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)}`,
                       type: 'sell',
                     },
                     ...l.slice(0, 29),
@@ -921,7 +927,10 @@ export default function TradingDashboard() {
                 }
               }
             } else {
-              lastSignalStateRef.current[sym] = 'HOLD';
+              // Signal returned to HOLD: Allow new BUY when next trigger occurs!
+              if (lastSignalStateRef.current[sym] === 'BUY') {
+                delete lastSignalStateRef.current[sym];
+              }
             }
           } catch (symErr) {
             console.error(`[ENGINE] ERROR symbol=${sym}:`, symErr);

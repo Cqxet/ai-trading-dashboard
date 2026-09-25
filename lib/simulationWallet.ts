@@ -2,7 +2,8 @@ import { SimulationWallet, SimulationPosition, SimulationTrade } from '@/types/t
 
 export const SIMULATION_WALLET_STORAGE_KEY = 'quant_jev_simulation_wallet_v1';
 export const INITIAL_SIMULATION_BALANCE = 10.0;
-export const TRADING_FEE_RATE = 0.001; // 0.1%
+// Official Binance Spot Trading Fee: 0.1% standard (0.075% with BNB deduction)
+export const TRADING_FEE_RATE = 0.001; // %0.1 Standart Binance Spot İşlem Komisyonu
 export const SIMULATED_SLIPPAGE_RATE = 0.00025; // 0.025% default slippage
 
 export function createDefaultWallet(): SimulationWallet {
