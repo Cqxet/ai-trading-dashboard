@@ -177,16 +177,16 @@ export async function analyzeMarketWithRealJev(
   let action: 'BUY' | 'SELL' | 'HOLD' = 'HOLD';
   let confidence = 70;
 
-  if (rsi < 32) {
+  if (rsi < 35) {
     action = 'BUY';
     confidence = 82;
   } else if (rsi > 68) {
     action = 'SELL';
     confidence = 80;
-  } else if (price > ema20 && ema20 > ema50 && marketData.changePercent24h > 1.2) {
+  } else if (price >= ema20 && marketData.changePercent24h > 0.8) {
     action = 'BUY';
     confidence = 78;
-  } else if (price < ema20 && ema20 < ema50 && marketData.changePercent24h < -1.2) {
+  } else if (price < ema20 && marketData.changePercent24h < -1.5) {
     action = 'SELL';
     confidence = 76;
   } else {

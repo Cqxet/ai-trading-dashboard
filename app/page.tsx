@@ -42,9 +42,23 @@ import {
   resetSimulationWallet,
   SIMULATION_WALLET_STORAGE_KEY,
 } from '@/lib/simulationWallet';
+import { scanBinanceMarkets, ScannedMarketCandidate, ScannerSummary } from '@/lib/services/marketScannerService';
+import { evaluateTradeRisk, DEFAULT_RISK_LIMITS } from '@/lib/services/riskEngine';
 
 const NASDAQ_SYMBOLS = ['AAPL', 'NVDA', 'MSFT', 'TSLA', 'QQQ', 'AMZN'];
-const BINANCE_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
+const BINANCE_SYMBOLS = [
+  'BTCUSDT',
+  'ETHUSDT',
+  'SOLUSDT',
+  'BNBUSDT',
+  'XRPUSDT',
+  'DOGEUSDT',
+  'ADAUSDT',
+  'AVAXUSDT',
+  'LINKUSDT',
+  'SUIUSDT',
+  'NEARUSDT',
+];
 const TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d'];
 
 export default function TradingDashboard() {
@@ -73,6 +87,21 @@ export default function TradingDashboard() {
   });
   const [symbolPrices, setSymbolPrices] = useState<Record<string, number>>({});
   const [showResetConfirm, setShowResetConfirm] = useState<boolean>(false);
+
+  // Dynamic Multi-Asset Scanner & Risk Engine
+  const [scannerSummary, setScannerSummary] = useState<ScannerSummary | null>(null);
+  const [isScanning, setIsScanning] = useState<boolean>(false);
+  const [currentTarget, setCurrentTarget] = useState<{
+    symbol: string;
+    mode: 'SPOT' | 'FUTURES';
+    action: string;
+    confidence: number;
+    price: number;
+    suggestedUsdt: number;
+    leverage: number;
+    reason: string;
+  } | null>(null);
+  const [autoScanEnabled, setAutoScanEnabled] = useState<boolean>(true);
 
   // Trading Account Data (For Nasdaq Alpaca Paper)
   const [account, setAccount] = useState<AccountInfo | null>(null);
@@ -456,7 +485,34 @@ export default function TradingDashboard() {
     return () => clearInterval(timer);
   }, [exchange, symbol, marketData]);
 
-  // Continuous Auto-Trading Bot Loop (JEV + Virtual Simulation Wallet)
+  // Periodic Market Scanner trigger (Every 30s)
+  const runMarketScan = useCallback(async () => {
+    if (exchange !== 'binance') return null;
+    setIsScanning(true);
+    try {
+      const res = await fetch('/api/binance/scanner?limit=6');
+      if (res.ok) {
+        const data: ScannerSummary = await res.json();
+        setScannerSummary(data);
+        return data;
+      }
+    } catch (e) {
+      console.warn('Market scan error:', e);
+    } finally {
+      setIsScanning(false);
+    }
+    return null;
+  }, [exchange]);
+
+  useEffect(() => {
+    if (exchange === 'binance') {
+      runMarketScan();
+      const t = setInterval(runMarketScan, 30000);
+      return () => clearInterval(t);
+    }
+  }, [exchange, runMarketScan]);
+
+  // Continuous Dynamic Multi-Asset Auto-Trading Bot Loop
   useEffect(() => {
     if (!isBotRunning) {
       setBotCountdown(botIntervalSec);
@@ -473,91 +529,132 @@ export default function TradingDashboard() {
               return;
             }
 
-            const mkt = await fetchMarketData(symbol, timeframe);
             const timeStr = new Date().toLocaleTimeString();
 
+            // 1. DYNAMIC MARKET SELECTION (Multi-asset Scanner)
+            let targetSymbol = symbol;
+            let scannerData = scannerSummary;
+            if (autoScanEnabled) {
+              const freshScan = await runMarketScan();
+              if (freshScan && freshScan.candidates.length > 0) {
+                scannerData = freshScan;
+                // Choose the candidate with highest opportunity score
+                const bestCandidate = freshScan.candidates[0];
+                targetSymbol = bestCandidate.symbol;
+              }
+            }
+
+            // 2. FETCH REAL DATA FOR TARGET
+            const mkt = await fetchMarketData(targetSymbol, timeframe);
             if (!mkt || mkt.price <= 0) {
               setBotLogs((l) => [
-                { time: timeStr, msg: `${symbol} | Market Data Unavailable - Bot duraklatıldı.`, type: 'hold' },
+                { time: timeStr, msg: `${targetSymbol} | Market Data Unavailable - Pas geçildi.`, type: 'hold' },
                 ...l.slice(0, 29),
               ]);
               return;
             }
 
-            // Check Cooldown (default 30s)
+            // 3. COOLDOWN CHECK
             const nowMs = Date.now();
             if (nowMs - lastTradeTimeRef.current < botCooldownSec * 1000) {
               const remainingCooldown = Math.ceil((botCooldownSec * 1000 - (nowMs - lastTradeTimeRef.current)) / 1000);
               setBotLogs((l) => [
-                { time: timeStr, msg: `${mkt.symbol} | Fiyat: ${mkt.price.toFixed(2)} | Cooldown aktif (${remainingCooldown}s)`, type: 'hold' },
+                { time: timeStr, msg: `${mkt.symbol} | Fiyat: $${mkt.price.toFixed(2)} | Cooldown aktif (${remainingCooldown}s)`, type: 'hold' },
                 ...l.slice(0, 29),
               ]);
               return;
             }
 
+            // 4. JEV DEEP ANALYSIS
             const analysis = await runAIAnalysis(mkt);
             if (!analysis) return;
 
+            // 5. RISK ENGINE EVALUATION
+            const requestedUsdt = parseFloat((currentWallet.cash * (botTradeSizePct / 100)).toFixed(2));
+            const riskDecision = evaluateTradeRisk(
+              currentWallet,
+              mkt.symbol,
+              analysis.action,
+              analysis.confidence,
+              mkt.price,
+              requestedUsdt,
+              analysis.stopLoss,
+              analysis.targetPrice,
+              {
+                ...DEFAULT_RISK_LIMITS,
+                minConfidence: botMinConfidence,
+                maxPositionSizePercent: botTradeSizePct,
+              }
+            );
+
+            // Update Current Target Display
+            setCurrentTarget({
+              symbol: mkt.symbol,
+              mode: riskDecision.marketType,
+              action: analysis.action,
+              confidence: analysis.confidence,
+              price: mkt.price,
+              suggestedUsdt: riskDecision.adjustedAmountUsdt,
+              leverage: riskDecision.leverage,
+              reason: analysis.reasoning,
+            });
+
             const priceFormatted = mkt.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-            if (analysis.action === 'BUY' && analysis.confidence >= botMinConfidence) {
-              const availableCash = currentWallet.cash;
-              const tradeUsdt = parseFloat((availableCash * (botTradeSizePct / 100)).toFixed(2));
+            // 6. EXECUTION VIA VIRTUAL SIMULATION WALLET
+            if (analysis.action === 'BUY' && riskDecision.permitted) {
+              const buyRes = executeSimulationBuy(
+                currentWallet,
+                mkt.symbol,
+                riskDecision.adjustedAmountUsdt,
+                mkt.price,
+                'JEV_BOT',
+                analysis.confidence
+              );
 
-              if (tradeUsdt < 0.10 || availableCash < 0.10) {
-                setBotLogs((l) => [
-                  { time: timeStr, msg: `${mkt.symbol} | Fiyat: ${priceFormatted} | JEV: BUY (%${analysis.confidence}) | Status: NO TRADE (Yetersiz bakiye)`, type: 'hold' },
-                  ...l.slice(0, 29),
-                ]);
-                return;
-              }
-
-              const buyRes = executeSimulationBuy(currentWallet, mkt.symbol, tradeUsdt, mkt.price, 'JEV_BOT', analysis.confidence);
               if (buyRes.success && buyRes.trade) {
                 setSimWallet(buyRes.wallet);
                 lastTradeTimeRef.current = Date.now();
                 setBotLogs((l) => [
                   {
                     time: timeStr,
-                    msg: `${mkt.symbol} | Fiyat: ${priceFormatted} | JEV: BUY | Güven: %${analysis.confidence} | Emir: ${tradeUsdt.toFixed(2)} USDT | Miktar: ${buyRes.trade?.quantity} | Status: FILLED`,
+                    msg: `${mkt.symbol} | Fiyat: $${priceFormatted} | JEV: BUY | Güven: %${analysis.confidence} | Emir: ${riskDecision.adjustedAmountUsdt.toFixed(2)} USDT | Miktar: ${buyRes.trade?.quantity} | Status: FILLED`,
                     type: 'buy',
                   },
                   ...l.slice(0, 29),
                 ]);
               }
-            } else if (analysis.action === 'SELL' && analysis.confidence >= botMinConfidence) {
+            } else if (analysis.action === 'SELL' && riskDecision.permitted) {
               const openPos = currentWallet.positions.find((p) => p.symbol === mkt.symbol);
-              if (!openPos || openPos.quantity <= 0) {
-                setBotLogs((l) => [
-                  {
-                    time: timeStr,
-                    msg: `${mkt.symbol} | Fiyat: ${priceFormatted} | JEV: SELL | Güven: %${analysis.confidence} | Status: NO POSITION TO SELL`,
-                    type: 'hold',
-                  },
-                  ...l.slice(0, 29),
-                ]);
-                return;
-              }
+              if (openPos && openPos.quantity > 0) {
+                const sellRes = executeSimulationSell(
+                  currentWallet,
+                  mkt.symbol,
+                  openPos.quantity,
+                  mkt.price,
+                  'JEV_BOT',
+                  analysis.confidence
+                );
 
-              const sellRes = executeSimulationSell(currentWallet, mkt.symbol, openPos.quantity, mkt.price, 'JEV_BOT', analysis.confidence);
-              if (sellRes.success && sellRes.trade) {
-                setSimWallet(sellRes.wallet);
-                lastTradeTimeRef.current = Date.now();
-                const pnl = sellRes.trade.realizedPnL || 0;
-                setBotLogs((l) => [
-                  {
-                    time: timeStr,
-                    msg: `${mkt.symbol} | Fiyat: ${priceFormatted} | JEV: SELL | Güven: %${analysis.confidence} | Realized P&L: ${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)} USDT | Status: FILLED`,
-                    type: 'sell',
-                  },
-                  ...l.slice(0, 29),
-                ]);
+                if (sellRes.success && sellRes.trade) {
+                  setSimWallet(sellRes.wallet);
+                  lastTradeTimeRef.current = Date.now();
+                  const pnl = sellRes.trade.realizedPnL || 0;
+                  setBotLogs((l) => [
+                    {
+                      time: timeStr,
+                      msg: `${mkt.symbol} | Fiyat: $${priceFormatted} | JEV: SELL | Güven: %${analysis.confidence} | Realized P&L: ${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)} USDT | Status: FILLED`,
+                      type: 'sell',
+                    },
+                    ...l.slice(0, 29),
+                  ]);
+                }
               }
             } else {
               setBotLogs((l) => [
                 {
                   time: timeStr,
-                  msg: `${mkt.symbol} | Fiyat: ${priceFormatted} | JEV: ${analysis.action} | Güven: %${analysis.confidence} | Status: NO TRADE`,
+                  msg: `${mkt.symbol} | Fiyat: $${priceFormatted} | JEV: ${analysis.action} | Güven: %${analysis.confidence} | ${riskDecision.permitted ? 'Beklemede' : riskDecision.reason}`,
                   type: 'hold',
                 },
                 ...l.slice(0, 29),
@@ -571,7 +668,19 @@ export default function TradingDashboard() {
     }, 1000);
 
     return () => clearInterval(intervalTimer);
-  }, [isBotRunning, botIntervalSec, botMinConfidence, botTradeSizePct, botCooldownSec, symbol, timeframe, fetchMarketData]);
+  }, [
+    isBotRunning,
+    botIntervalSec,
+    botMinConfidence,
+    botTradeSizePct,
+    botCooldownSec,
+    symbol,
+    timeframe,
+    autoScanEnabled,
+    scannerSummary,
+    runMarketScan,
+    fetchMarketData,
+  ]);
 
   const currencySymbol = exchange === 'nasdaq' ? '$' : 'USDT ';
   const currentSymbols = exchange === 'nasdaq' ? NASDAQ_SYMBOLS : BINANCE_SYMBOLS;
@@ -1240,6 +1349,116 @@ export default function TradingDashboard() {
         </div>
         {/* Right Column (4 cols): AI Decision Engine & Bot */}
         <div className="lg:col-span-4 flex flex-col gap-6">
+
+          {/* Dynamic Market Scanner & Multi-Asset Ranking Panel */}
+          {exchange === 'binance' && (
+            <div className="bg-[#121824] border border-indigo-500/30 rounded-2xl p-5 shadow-xl flex flex-col gap-4">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                <div className="flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-indigo-400 animate-pulse" />
+                  <span className="font-bold text-sm text-white">Market Scanner (Çoklu Piyasa Tarayıcısı)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-950/80 border border-indigo-700/50 text-indigo-300">
+                    {scannerSummary ? `Rejim: ${scannerSummary.marketRegime}` : 'Taranıyor...'}
+                  </span>
+                  <button
+                    onClick={() => runMarketScan()}
+                    disabled={isScanning}
+                    className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
+                    title="Piyasayı Şimdi Tara"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isScanning ? 'animate-spin text-indigo-400' : ''}`} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Scanner Stats Bar */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs bg-slate-900/60 p-2.5 rounded-xl border border-slate-800">
+                <div>
+                  <span className="text-slate-400 block text-[10px]">Taranan Çiftler</span>
+                  <span className="font-bold text-slate-200">{scannerSummary ? `${scannerSummary.scannedCount}+` : '---'}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px]">Likidite Filtresi</span>
+                  <span className="font-bold text-emerald-400">{scannerSummary ? `${scannerSummary.liquidCount} Aktif` : '---'}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px]">Dinamik Seçim</span>
+                  <button
+                    onClick={() => setAutoScanEnabled(!autoScanEnabled)}
+                    className={`font-bold text-[10px] px-2 py-0.5 rounded mt-0.5 ${autoScanEnabled ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-800 text-slate-400'}`}
+                  >
+                    {autoScanEnabled ? 'AÇIK (En İyi Fırsat)' : 'SABİT SEMBOL'}
+                  </button>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px]">Maks. Pozisyon</span>
+                  <span className="font-bold text-cyan-400">3 Pozisyon (Max %60)</span>
+                </div>
+              </div>
+
+              {/* Current Bot Target Box */}
+              {currentTarget && (
+                <div className="bg-slate-950/80 p-3 rounded-xl border border-cyan-500/40 flex flex-col gap-1.5 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] uppercase font-bold text-cyan-400">CURRENT BOT TARGET</span>
+                    <span className="text-[10px] font-mono text-slate-400">{currentTarget.mode} ({currentTarget.leverage}x)</span>
+                  </div>
+                  <div className="flex items-baseline justify-between font-mono">
+                    <span className="text-base font-bold text-white">{currentTarget.symbol}</span>
+                    <span className="text-sm text-emerald-400 font-bold">${currentTarget.price.toFixed(2)}</span>
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${currentTarget.action === 'BUY' ? 'bg-emerald-500/20 text-emerald-300' : currentTarget.action === 'SELL' ? 'bg-rose-500/20 text-rose-300' : 'bg-amber-500/20 text-amber-300'}`}>
+                      {currentTarget.action} (%{currentTarget.confidence})
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Top Ranked Opportunities Table */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="text-slate-400 border-b border-slate-800 pb-1 text-[11px]">
+                      <th className="py-1.5">Sembol</th>
+                      <th className="py-1.5">Fiyat</th>
+                      <th className="py-1.5">24s Değişim</th>
+                      <th className="py-1.5">Skor</th>
+                      <th className="py-1.5 text-right">Seç</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/40">
+                    {scannerSummary?.candidates.map((c) => (
+                      <tr key={c.symbol} className="hover:bg-slate-800/30 transition">
+                        <td className="py-2 font-bold text-white flex items-center gap-1.5">
+                          {c.symbol}
+                          {c.trend === 'BULLISH' && <span className="text-[9px] text-emerald-400 font-normal">▲</span>}
+                          {c.trend === 'BEARISH' && <span className="text-[9px] text-rose-400 font-normal">▼</span>}
+                        </td>
+                        <td className="py-2 text-slate-300 font-mono">${c.price.toFixed(2)}</td>
+                        <td className={`py-2 font-semibold ${c.change24hPercent >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          {c.change24hPercent >= 0 ? '+' : ''}{c.change24hPercent.toFixed(2)}%
+                        </td>
+                        <td className="py-2">
+                          <span className="px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-300 font-bold border border-indigo-500/30 text-[10px]">
+                            {c.score}
+                          </span>
+                        </td>
+                        <td className="py-2 text-right">
+                          <button
+                            onClick={() => handleSymbolChange(c.symbol)}
+                            className={`px-2 py-0.5 rounded text-[10px] font-semibold transition ${symbol === c.symbol ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+                          >
+                            {symbol === c.symbol ? 'Aktif' : 'İncele'}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           {/* Continuous Auto-Trading Bot Panel */}
           <div className="bg-[#121824] border border-cyan-500/30 rounded-2xl p-5 shadow-xl relative overflow-hidden flex flex-col gap-4">
