@@ -82,9 +82,14 @@ function signQuery(query: string, secret: string): string {
   return crypto.createHmac('sha256', secret).update(query).digest('hex');
 }
 
+function getBinanceCredentials(apiKey?: string, secretKey?: string) {
+  const key = apiKey || process.env.BINANCE_API_KEY || process.env.BINANCE_KEY;
+  const secret = secretKey || process.env.BINANCE_API_SECRET || process.env.BINANCE_SECRET;
+  return { key, secret };
+}
+
 export async function getBinanceAccount(apiKey?: string, secretKey?: string): Promise<AccountInfo> {
-  const key = apiKey || process.env.BINANCE_API_KEY;
-  const secret = secretKey || process.env.BINANCE_API_SECRET;
+  const { key, secret } = getBinanceCredentials(apiKey, secretKey);
 
   if (key && secret) {
     try {
@@ -168,8 +173,7 @@ export async function executeBinanceTrade(
   apiKey?: string,
   secretKey?: string
 ): Promise<TradeOrder> {
-  const key = apiKey || process.env.BINANCE_API_KEY;
-  const secret = secretKey || process.env.BINANCE_API_SECRET;
+  const { key, secret } = getBinanceCredentials(apiKey, secretKey);
   const formattedSymbol = symbol.toUpperCase().replace('/', '').replace('-', '');
 
   const market = await getBinanceMarketData(formattedSymbol);

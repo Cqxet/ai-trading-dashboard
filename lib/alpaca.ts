@@ -22,10 +22,15 @@ const defaultStockPrices: Record<string, number> = {
   AMZN: 188.75,
 };
 
+function getAlpacaCredentials(apiKey?: string, secretKey?: string) {
+  const key = apiKey || process.env.ALPACA_API_KEY || process.env.ALPACA_KEY || process.env.APCA_API_KEY_ID;
+  const secret = secretKey || process.env.ALPACA_API_SECRET || process.env.ALPACA_SECRET || process.env.APCA_API_SECRET_KEY;
+  return { key, secret };
+}
+
 export async function getNasdaqMarketData(symbol: string, apiKey?: string, secretKey?: string): Promise<MarketData> {
   const sym = symbol.toUpperCase().trim();
-  const key = apiKey || process.env.ALPACA_API_KEY;
-  const secret = secretKey || process.env.ALPACA_API_SECRET;
+  const { key, secret } = getAlpacaCredentials(apiKey, secretKey);
 
   if (key && secret) {
     try {
@@ -110,8 +115,7 @@ export async function getNasdaqMarketData(symbol: string, apiKey?: string, secre
 }
 
 export async function getNasdaqAccount(apiKey?: string, secretKey?: string): Promise<AccountInfo> {
-  const key = apiKey || process.env.ALPACA_API_KEY;
-  const secret = secretKey || process.env.ALPACA_API_SECRET;
+  const { key, secret } = getAlpacaCredentials(apiKey, secretKey);
 
   if (key && secret) {
     try {
@@ -202,8 +206,7 @@ export async function executeNasdaqTrade(
   secretKey?: string
 ): Promise<TradeOrder> {
   const sym = symbol.toUpperCase().trim();
-  const key = apiKey || process.env.ALPACA_API_KEY;
-  const secret = secretKey || process.env.ALPACA_API_SECRET;
+  const { key, secret } = getAlpacaCredentials(apiKey, secretKey);
 
   const market = await getNasdaqMarketData(sym, key, secret);
   const tradePrice = market.price;
