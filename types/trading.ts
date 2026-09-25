@@ -1,16 +1,7 @@
-export type ExchangeType = 'nasdaq' | 'binance';
+export * from '@/lib/core/types';
 
+// Backward compatibility aliases if any
 export type ActionType = 'BUY' | 'SELL' | 'HOLD';
-
-export interface Candle {
-  timestamp: number;
-  time: string;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-}
 
 export interface MarketData {
   symbol: string;
@@ -21,20 +12,20 @@ export interface MarketData {
   low24h: number;
   volume24h: number;
   timestamp: number;
-  source: string; // e.g. "BINANCE_MAINNET", "ALPACA_MARKET_DATA", "YAHOO_FINANCE_LIVE"
+  source: string;
   latencyMs: number;
   isStale: boolean;
   staleAgeSec?: number;
   bid?: number;
   ask?: number;
   open24h?: number;
-  candles: Candle[];
-  timeframe: string; // "1m" | "5m" | "15m" | "1h" | "4h" | "1d"
+  candles: import('@/lib/core/types').Candle[];
+  timeframe: string;
   history?: { time: string; price: number }[];
 }
 
 export interface AccountInfo {
-  accountType: 'BINANCE_TESTNET' | 'ALPACA_PAPER';
+  accountType: 'BINANCE_TESTNET' | 'ALPACA_PAPER' | 'LOCAL_SIM';
   equity: number;
   cash: number;
   buyingPower: number;
@@ -42,40 +33,45 @@ export interface AccountInfo {
   isDemo: boolean;
   status: 'CONNECTED' | 'API_KEY_INVALID' | 'UNAVAILABLE' | 'RESTRICTED_LOCATION';
   statusMessage: string;
-  positions: Position[];
+  positions: import('@/lib/core/types').Position[];
   realizedPnL?: number;
   unrealizedPnL: number;
-  orders?: TradeOrder[];
+  orders?: import('@/lib/core/types').TradeOrder[];
 }
 
-export interface Position {
+export interface VirtualPosition {
   symbol: string;
   quantity: number;
-  entryPrice: number;
-  currentPrice: number; // REAL current market price
-  marketValue: number;  // quantity * currentPrice
-  unrealizedPl: number; // (currentPrice - entryPrice) * quantity
-  unrealizedPlPercent: number; // ((currentPrice / entryPrice) - 1) * 100
-  side: 'long' | 'short';
+  averageEntry: number;
 }
 
-export interface TradeOrder {
+export interface VirtualTrade {
   id: string;
+  time: string;
+  timestamp: number;
   symbol: string;
   side: 'BUY' | 'SELL';
+  executionPrice: number;
   quantity: number;
-  price: number;
-  status: 'FILLED' | 'PENDING' | 'REJECTED';
-  timestamp: string;
-  executedBy: 'AI' | 'MANUAL';
-  exchange: ExchangeType;
-  notes?: string;
-  orderType?: 'MARKET' | 'LIMIT';
+  usdtValue: number;
+  fee: number;
+  realizedPnL: number;
+  source: 'MANUAL' | 'JEV_BOT' | 'QUANT_ENGINE';
+  jevConfidence?: number;
+}
+
+export interface VirtualWalletState {
+  version: 1;
+  initialBalance: number;
+  cash: number;
+  positions: VirtualPosition[];
+  trades: VirtualTrade[];
+  realizedPnL: number;
 }
 
 export interface AIAnalysisResult {
-  action: ActionType;
-  confidence: number; // 0 to 100
+  action: 'BUY' | 'SELL' | 'HOLD';
+  confidence: number;
   targetPrice: number;
   stopLoss: number;
   reasoning: string;

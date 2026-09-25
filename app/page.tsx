@@ -21,7 +21,10 @@ import {
   Square,
   BarChart3,
   Bot,
-  Activity
+  Activity,
+  AlertOctagon,
+  GitCompare,
+  Eye,
 } from 'lucide-react';
 import {
   ExchangeType,
@@ -53,6 +56,13 @@ import {
   BotStopReason,
   BotRunStatus,
 } from '@/types/fastEngine';
+import { TradingModeBadge } from '@/components/trading/TradingModeBadge';
+import { EmergencyStopModal } from '@/components/trading/EmergencyStopModal';
+import { ScoreBreakdownModal } from '@/components/trading/ScoreBreakdownModal';
+import { MarketScannerTable, ScannerRowData } from '@/components/trading/MarketScannerTable';
+import { ABTestCard } from '@/components/trading/ABTestCard';
+import { SystemHealthModal } from '@/components/trading/SystemHealthModal';
+import { TradingMode } from '@/lib/core/types';
 
 const NASDAQ_SYMBOLS = ['AAPL', 'NVDA', 'MSFT', 'TSLA', 'QQQ', 'AMZN'];
 const BINANCE_SYMBOLS = [
@@ -116,7 +126,7 @@ export default function TradingDashboard() {
   const [account, setAccount] = useState<AccountInfo | null>(null);
   const [initialEquity, setInitialEquity] = useState<number | null>(null);
   const [orders, setOrders] = useState<TradeOrder[]>([]);
-  const [activeTableTab, setActiveTableTab] = useState<'positions' | 'orders'>('positions');
+  const [activeTableTab, setActiveTableTab] = useState<'positions' | 'orders' | 'scanner' | 'abtest'>('positions');
 
   // AI Engine Choice: Jev vs Gemini
   const [aiEngine, setAiEngine] = useState<'jev' | 'gemini'>('jev');
@@ -236,6 +246,63 @@ export default function TradingDashboard() {
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [showHealth, setShowHealth] = useState<boolean>(false);
   const [healthData, setHealthData] = useState<any>(null);
+
+  // Enterprise Quant Trading & JEV Architecture States
+  const [tradingMode, setTradingMode] = useState<TradingMode>('LOCAL_SIM');
+  const [showEmergencyModal, setShowEmergencyModal] = useState<boolean>(false);
+  const [showBreakdownModal, setShowBreakdownModal] = useState<boolean>(false);
+  const [breakdownSymbol, setBreakdownSymbol] = useState<string>('BTCUSDT');
+
+  const scannerRows: ScannerRowData[] = [
+    {
+      symbol: 'BTCUSDT',
+      price: symbol === 'BTCUSDT' && marketData ? marketData.price : 64850.2,
+      change24hPct: symbol === 'BTCUSDT' && marketData ? marketData.changePercent24h : 2.15,
+      quantScore: 78,
+      jevRegime: 'TREND_UP',
+      jevQuality: 84,
+      spreadBps: 2.4,
+      volatility: 'ORTA (1.8% ATR)',
+      signal: 'BUY',
+      status: 'ACTIVE',
+    },
+    {
+      symbol: 'ETHUSDT',
+      price: symbol === 'ETHUSDT' && marketData ? marketData.price : 3485.4,
+      change24hPct: symbol === 'ETHUSDT' && marketData ? marketData.changePercent24h : 3.42,
+      quantScore: 82,
+      jevRegime: 'BREAKOUT',
+      jevQuality: 88,
+      spreadBps: 3.1,
+      volatility: 'YÜKSEK (2.6% ATR)',
+      signal: 'BUY',
+      status: 'ACTIVE',
+    },
+    {
+      symbol: 'SOLUSDT',
+      price: symbol === 'SOLUSDT' && marketData ? marketData.price : 148.9,
+      change24hPct: symbol === 'SOLUSDT' && marketData ? marketData.changePercent24h : -1.12,
+      quantScore: 61,
+      jevRegime: 'RANGE',
+      jevQuality: 55,
+      spreadBps: 4.2,
+      volatility: 'ORTA (2.1% ATR)',
+      signal: 'HOLD',
+      status: 'ACTIVE',
+    },
+    {
+      symbol: 'BNBUSDT',
+      price: symbol === 'BNBUSDT' && marketData ? marketData.price : 584.2,
+      change24hPct: symbol === 'BNBUSDT' && marketData ? marketData.changePercent24h : 0.85,
+      quantScore: 71,
+      jevRegime: 'TREND_UP',
+      jevQuality: 76,
+      spreadBps: 3.8,
+      volatility: 'DÜŞÜK (1.2% ATR)',
+      signal: 'BUY',
+      status: 'ACTIVE',
+    },
+  ];
 
   // API Keys (Stored locally for client testing, private server-side fallback used)
   const [geminiKey, setGeminiKey] = useState<string>('');
@@ -1028,35 +1095,47 @@ export default function TradingDashboard() {
           </div>
         </div>
 
-        {/* Exchange Switcher Tabs */}
-        <div className="flex items-center bg-[#070a0f] p-1 rounded-xl border border-slate-800">
-          <button
-            onClick={() => handleExchangeChange('binance')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
-              exchange === 'binance'
-                ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-md shadow-amber-500/20'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Layers className="w-3.5 h-3.5" />
-            <span>Binance (Mainnet Data & Spot Testnet)</span>
-          </button>
+        {/* Exchange Switcher Tabs & Mode Badge */}
+        <div className="flex items-center gap-3">
+          <TradingModeBadge mode={tradingMode} onModeChange={setTradingMode} isLiveAllowed={false} />
 
-          <button
-            onClick={() => handleExchangeChange('nasdaq')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
-              exchange === 'nasdaq'
-                ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md shadow-blue-500/20'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <TrendingUp className="w-3.5 h-3.5" />
-            <span>Nasdaq (Real Data & Alpaca Paper)</span>
-          </button>
+          <div className="flex items-center bg-[#070a0f] p-1 rounded-xl border border-slate-800">
+            <button
+              onClick={() => handleExchangeChange('binance')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
+                exchange === 'binance'
+                  ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-md shadow-amber-500/20'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Layers className="w-3.5 h-3.5" />
+              <span>Binance (Mainnet Data)</span>
+            </button>
+
+            <button
+              onClick={() => handleExchangeChange('nasdaq')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
+                exchange === 'nasdaq'
+                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md shadow-blue-500/20'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <TrendingUp className="w-3.5 h-3.5" />
+              <span>Nasdaq (Alpaca Paper)</span>
+            </button>
+          </div>
         </div>
 
         {/* Action Controls */}
         <div className="flex items-center gap-2.5">
+          {/* Emergency Stop Button */}
+          <button
+            onClick={() => setShowEmergencyModal(true)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/40 text-xs font-bold text-rose-300 transition shadow-sm"
+          >
+            <AlertOctagon className="w-3.5 h-3.5 text-rose-400 animate-pulse" />
+            <span>Emergency Stop</span>
+          </button>
           <button
             onClick={() => {
               fetchMarketData(symbol, timeframe);
@@ -1441,6 +1520,26 @@ export default function TradingDashboard() {
                 >
                   İşlem Geçmişi ({exchange === 'binance' ? simWallet.trades.length : orders.length})
                 </button>
+                <button
+                  onClick={() => setActiveTableTab('scanner')}
+                  className={`text-xs font-bold pb-2 ml-4 transition border-b-2 ${
+                    activeTableTab === 'scanner'
+                      ? 'border-indigo-500 text-white'
+                      : 'border-transparent text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Market Scanner ({scannerRows.length})
+                </button>
+                <button
+                  onClick={() => setActiveTableTab('abtest')}
+                  className={`text-xs font-bold pb-2 ml-4 transition border-b-2 ${
+                    activeTableTab === 'abtest'
+                      ? 'border-indigo-500 text-white'
+                      : 'border-transparent text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  JEV A/B Shadow Test
+                </button>
               </div>
               <span className="text-[11px] text-slate-400">
                 {exchange === 'binance' ? 'Gerçek Piyasa Fiyatları ile Senkronize' : (account?.statusMessage || 'Bağlı')}
@@ -1688,6 +1787,28 @@ export default function TradingDashboard() {
                     </div>
                   )
                 )}
+              </div>
+            )}
+
+            {/* Market Scanner View */}
+            {activeTableTab === 'scanner' && (
+              <div className="mt-3">
+                <MarketScannerTable
+                  rows={scannerRows}
+                  selectedSymbol={symbol}
+                  onSelectRow={(sym) => handleSymbolChange(sym)}
+                  onOpenBreakdown={(sym) => {
+                    setBreakdownSymbol(sym);
+                    setShowBreakdownModal(true);
+                  }}
+                />
+              </div>
+            )}
+
+            {/* JEV A/B Shadow Test View */}
+            {activeTableTab === 'abtest' && (
+              <div className="mt-3">
+                <ABTestCard />
               </div>
             )}
           </div>
@@ -2391,6 +2512,35 @@ export default function TradingDashboard() {
           </div>
         </div>
       )}
+
+      {/* Emergency Stop Modal */}
+      <EmergencyStopModal
+        isOpen={showEmergencyModal}
+        onClose={() => setShowEmergencyModal(false)}
+        onActionComplete={(msg) => {
+          setTradeNotice(msg);
+          setTimeout(() => setTradeNotice(null), 5000);
+          fetchAccountData();
+        }}
+      />
+
+      {/* Score Breakdown Modal */}
+      <ScoreBreakdownModal
+        isOpen={showBreakdownModal}
+        onClose={() => setShowBreakdownModal(false)}
+        symbol={breakdownSymbol}
+        signal={null}
+        features={null}
+        jev={null}
+        risk={null}
+      />
+
+      {/* Enterprise System Health Diagnostic Modal */}
+      <SystemHealthModal
+        isOpen={showHealth}
+        onClose={() => setShowHealth(false)}
+        healthData={healthData}
+      />
     </div>
   );
 }

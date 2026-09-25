@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { SystemHealthReport } from '@/types/trading';
+import { tradingWorker } from '@/lib/core/tradingWorker';
+import { marketDataEngine } from '@/lib/core/marketDataEngine';
 
 export const dynamic = 'force-dynamic';
 
@@ -114,13 +116,18 @@ export async function GET(request: Request) {
     }
   }
 
-  const report: SystemHealthReport = {
+  const workerHealth = tradingWorker.getHealthReport();
+  const wsMetrics = marketDataEngine.getHealthMetrics();
+
+  const report = {
     timestamp: new Date().toISOString(),
     binanceMarket,
     binanceTrading,
     alpacaMarket,
     alpacaTrading,
     jev,
+    worker: workerHealth,
+    websocket: wsMetrics,
   };
 
   return NextResponse.json(report);
