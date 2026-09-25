@@ -1,9 +1,8 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   TrendingUp,
-  Activity,
   Cpu,
   Layers,
   Settings,
@@ -18,7 +17,11 @@ import {
   Wallet,
   Sliders,
   Check,
-  X
+  X,
+  Play,
+  Square,
+  BarChart3,
+  Bot
 } from 'lucide-react';
 import { ExchangeType, MarketData, AccountInfo, AIAnalysisResult, TradeOrder } from '@/types/trading';
 
@@ -35,11 +38,18 @@ export default function TradingDashboard() {
   const [orders, setOrders] = useState<TradeOrder[]>([]);
   const [activeTableTab, setActiveTableTab] = useState<'positions' | 'orders'>('positions');
 
-  // AI & Automation
+  // AI Engine Choice: Gemini vs Jev
+  const [aiEngine, setAiEngine] = useState<'gemini' | 'jev'>('jev');
   const [strategy, setStrategy] = useState<string>('momentum');
   const [aiAnalysis, setAiAnalysis] = useState<AIAnalysisResult | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
-  const [autoTradeEnabled, setAutoTradeEnabled] = useState<boolean>(false);
+
+  // Continuous Auto-Trading Bot Loop (Sürekli Otomatik Al-Sat Döngüsü)
+  const [isBotRunning, setIsBotRunning] = useState<boolean>(false);
+  const [botIntervalSec, setBotIntervalSec] = useState<number>(15);
+  const [botCountdown, setBotCountdown] = useState<number>(15);
+  const [initialEquity, setInitialEquity] = useState<number | null>(null);
+  const [botLogs, setBotLogs] = useState<{ time: string; msg: string; type: 'info' | 'buy' | 'sell' | 'hold' }[]>([]);
 
   // Manual Trading
   const [orderQuantity, setOrderQuantity] = useState<string>('5');
@@ -53,6 +63,7 @@ export default function TradingDashboard() {
 
   // API Keys (saved in localStorage for client testing)
   const [geminiKey, setGeminiKey] = useState<string>('');
+  const [jevKey, setJevKey] = useState<string>('');
   const [alpacaKey, setAlpacaKey] = useState<string>('');
   const [alpacaSecret, setAlpacaSecret] = useState<string>('');
   const [binanceKey, setBinanceKey] = useState<string>('');
@@ -62,6 +73,7 @@ export default function TradingDashboard() {
   useEffect(() => {
     if (typeof window !== 'undefined') {
       setGeminiKey(localStorage.getItem('gemini_api_key') || '');
+      setJevKey(localStorage.getItem('jev_api_key') || '');
       setAlpacaKey(localStorage.getItem('alpaca_api_key') || '');
       setAlpacaSecret(localStorage.getItem('alpaca_api_secret') || '');
       setBinanceKey(localStorage.getItem('binance_api_key') || '');
@@ -72,6 +84,7 @@ export default function TradingDashboard() {
   const saveKeysToStorage = () => {
     if (typeof window !== 'undefined') {
       localStorage.setItem('gemini_api_key', geminiKey);
+      localStorage.setItem('jev_api_key', jevKey);
       localStorage.setItem('alpaca_api_key', alpacaKey);
       localStorage.setItem('alpaca_api_secret', alpacaSecret);
       localStorage.setItem('binance_api_key', binanceKey);
@@ -85,6 +98,7 @@ export default function TradingDashboard() {
   const getHeaders = useCallback(() => {
     const headers: Record<string, string> = {};
     if (geminiKey) headers['x-gemini-key'] = geminiKey;
+    if (jevKey) headers['x-jev-key'] = jevKey;
     if (exchange === 'nasdaq') {
       if (alpacaKey) headers['x-alpaca-key'] = alpacaKey;
       if (alpacaSecret) headers['x-alpaca-secret'] = alpacaSecret;
@@ -93,7 +107,7 @@ export default function TradingDashboard() {
       if (binanceSecret) headers['x-binance-secret'] = binanceSecret;
     }
     return headers;
-  }, [exchange, geminiKey, alpacaKey, alpacaSecret, binanceKey, binanceSecret]);
+  }, [exchange, geminiKey, jevKey, alpacaKey, alpacaSecret, binanceKey, binanceSecret]);
 
   // Fetch Market Data
   const fetchMarketData = useCallback(async (sym: string) => {
@@ -106,12 +120,14 @@ export default function TradingDashboard() {
       if (res.ok) {
         const data = await res.json();
         setMarketData(data);
+        return data;
       }
     } catch (err) {
       console.error('Failed to load market data', err);
     } finally {
       setIsLoadingMarket(false);
     }
+    return null;
   }, [exchange, getHeaders]);
 
   // Fetch Account & Positions
@@ -124,6 +140,7 @@ export default function TradingDashboard() {
       if (res.ok) {
         const data = await res.json();
         setAccount(data);
+        setInitialEquity((prev) => (prev === null && data.equity ? data.equity : prev));
         if (data.orders) {
           setOrders(data.orders);
         }
@@ -133,13 +150,14 @@ export default function TradingDashboard() {
     }
   }, [exchange, getHeaders]);
 
-  // Handle Tab Switch
+  // Tab change
   const handleTabChange = (newExchange: ExchangeType) => {
     setExchange(newExchange);
     const newSymbol = newExchange === 'nasdaq' ? 'AAPL' : 'BTCUSDT';
     setSymbol(newSymbol);
     setOrderQuantity(newExchange === 'nasdaq' ? '5' : '0.05');
     setAiAnalysis(null);
+    setInitialEquity(null);
   };
 
   useEffect(() => {
@@ -148,13 +166,14 @@ export default function TradingDashboard() {
     const interval = setInterval(() => {
       fetchMarketData(symbol);
       fetchAccountData();
-    }, 12000);
+    }, 15000);
     return () => clearInterval(interval);
   }, [exchange, symbol, fetchMarketData, fetchAccountData]);
 
-  // Execute Gemini AI Analysis
-  const runGeminiAnalysis = async () => {
-    if (!marketData) return;
+  // Execute AI Analysis
+  const runAIAnalysis = async (currentMkt?: MarketData) => {
+    const targetMkt = currentMkt || marketData;
+    if (!targetMkt) return null;
     setIsAnalyzing(true);
     try {
       const res = await fetch('/api/ai/analyze', {
@@ -165,28 +184,26 @@ export default function TradingDashboard() {
         },
         body: JSON.stringify({
           exchange,
-          marketData,
+          marketData: targetMkt,
           strategy,
+          aiEngine,
         }),
       });
 
       if (res.ok) {
         const analysis: AIAnalysisResult = await res.json();
         setAiAnalysis(analysis);
-
-        // If Auto-Trade is active and recommendation is BUY/SELL with high confidence
-        if (autoTradeEnabled && analysis.confidence >= 70 && analysis.action !== 'HOLD') {
-          handleExecuteOrder(analysis.action, analysis.suggestedQuantity, 'AI');
-        }
+        return analysis;
       }
     } catch (err) {
       console.error('AI Analysis failed:', err);
     } finally {
       setIsAnalyzing(false);
     }
+    return null;
   };
 
-  // Execute Order (Buy / Sell)
+  // Execute Order
   const handleExecuteOrder = async (side: 'BUY' | 'SELL', qty: number, executedBy: 'AI' | 'MANUAL' = 'MANUAL') => {
     if (!marketData || qty <= 0) return;
     setIsTrading(true);
@@ -226,8 +243,50 @@ export default function TradingDashboard() {
     }
   };
 
+  // Continuous Auto-Trading Bot Loop
+  useEffect(() => {
+    if (!isBotRunning) {
+      setBotCountdown(botIntervalSec);
+      return;
+    }
+
+    const intervalTimer = setInterval(async () => {
+      setBotCountdown((prev) => {
+        if (prev <= 1) {
+          (async () => {
+            const mkt = await fetchMarketData(symbol);
+            if (mkt) {
+              const analysis = await runAIAnalysis(mkt);
+              if (analysis) {
+                const now = new Date().toLocaleTimeString();
+                if (analysis.action === 'BUY' && analysis.confidence >= 70) {
+                  setBotLogs((l) => [{ time: now, msg: `${mkt.symbol} -> ALIM Emri (${analysis.suggestedQuantity} adet, %${analysis.confidence} güven)`, type: 'buy' }, ...l.slice(0, 19)]);
+                  await handleExecuteOrder('BUY', analysis.suggestedQuantity, 'AI');
+                } else if (analysis.action === 'SELL' && analysis.confidence >= 70) {
+                  setBotLogs((l) => [{ time: now, msg: `${mkt.symbol} -> SATIŞ Emri (${analysis.suggestedQuantity} adet, %${analysis.confidence} güven)`, type: 'sell' }, ...l.slice(0, 19)]);
+                  await handleExecuteOrder('SELL', analysis.suggestedQuantity, 'AI');
+                } else {
+                  setBotLogs((l) => [{ time: now, msg: `${mkt.symbol} -> BEKLE (Pozisyon korundu, güven: %${analysis.confidence})`, type: 'hold' }, ...l.slice(0, 19)]);
+                }
+              }
+            }
+          })();
+          return botIntervalSec;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(intervalTimer);
+  }, [isBotRunning, botIntervalSec, symbol, fetchMarketData]);
+
   const currencySymbol = exchange === 'nasdaq' ? '$' : 'USDT ';
   const currentSymbols = exchange === 'nasdaq' ? NASDAQ_SYMBOLS : BINANCE_SYMBOLS;
+
+  // Realized Net Profit Calculation
+  const currentEquity = account?.equity || 0;
+  const netPnL = initialEquity ? currentEquity - initialEquity : 0;
+  const netPnLPct = initialEquity && initialEquity > 0 ? (netPnL / initialEquity) * 100 : 0;
 
   return (
     <div className="min-h-screen bg-[#0b0e14] text-slate-100 flex flex-col font-sans selection:bg-indigo-500/30">
@@ -240,10 +299,10 @@ export default function TradingDashboard() {
           <div>
             <div className="flex items-center gap-2">
               <span className="font-bold text-base tracking-wide bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">
-                QuantGemini Terminal
+                QuantGemini & Jev Terminal
               </span>
               <span className="text-[10px] uppercase font-semibold px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/30">
-                AI Trading
+                {aiEngine === 'jev' ? '⚡ TypeSafe Jev' : '🧠 Gemini 1.5'}
               </span>
             </div>
             <p className="text-xs text-slate-400">Nasdaq Paper & Binance Testnet Dual Engine</p>
@@ -295,7 +354,7 @@ export default function TradingDashboard() {
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs font-medium text-slate-300 hover:text-white hover:border-slate-700 transition"
           >
             <HelpCircle className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Vercel & API Rehberi</span>
+            <span>API & Bot Rehberi</span>
           </button>
 
           <button
@@ -311,13 +370,12 @@ export default function TradingDashboard() {
       {/* Main Container */}
       <main className="flex-1 p-4 lg:p-6 max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-6">
         
-        {/* Left & Middle Column (8 cols): Market & Portfolio */}
+        {/* Left Column (8 cols): Market, Charts, Positions */}
         <div className="lg:col-span-8 flex flex-col gap-6">
 
           {/* Account Metrics Bar */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="bg-[#121824] border border-slate-800/80 rounded-xl p-4 flex flex-col justify-between relative overflow-hidden group">
-              <div className="absolute top-0 right-0 w-24 h-24 bg-blue-500/5 rounded-full blur-xl group-hover:bg-blue-500/10 transition" />
+            <div className="bg-[#121824] border border-slate-800/80 rounded-xl p-4 flex flex-col justify-between">
               <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
                 <span>Toplam Bakiye (Equity)</span>
                 <Wallet className="w-3.5 h-3.5 text-blue-400" />
@@ -331,8 +389,7 @@ export default function TradingDashboard() {
               </div>
             </div>
 
-            <div className="bg-[#121824] border border-slate-800/80 rounded-xl p-4 flex flex-col justify-between relative overflow-hidden group">
-              <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/5 rounded-full blur-xl group-hover:bg-emerald-500/10 transition" />
+            <div className="bg-[#121824] border border-slate-800/80 rounded-xl p-4 flex flex-col justify-between">
               <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
                 <span>Nakit / Alım Gücü</span>
                 <DollarSign className="w-3.5 h-3.5 text-emerald-400" />
@@ -340,48 +397,40 @@ export default function TradingDashboard() {
               <div className="text-xl font-bold tracking-tight text-white">
                 {account ? `${currencySymbol}${account.buyingPower.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '...'}
               </div>
+              <div className="text-[11px] text-slate-400 mt-1">Kullanılabilir Nakit</div>
+            </div>
+
+            <div className="bg-[#121824] border border-slate-800/80 rounded-xl p-4 flex flex-col justify-between">
+              <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
+                <span>Net Kar / Zarar (Bot PnL)</span>
+                <BarChart3 className="w-3.5 h-3.5 text-cyan-400" />
+              </div>
+              <div className={`text-xl font-bold tracking-tight ${netPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                {netPnL >= 0 ? '+' : ''}{currencySymbol}{netPnL.toFixed(2)} ({netPnL >= 0 ? '+' : ''}{netPnLPct.toFixed(2)}%)
+              </div>
               <div className="text-[11px] text-slate-400 mt-1">
-                Kullanılabilir Nakit
+                {initialEquity ? `Başlangıç: ${currencySymbol}${initialEquity.toFixed(2)}` : 'Hesaplanıyor...'}
               </div>
             </div>
 
-            <div className="bg-[#121824] border border-slate-800/80 rounded-xl p-4 flex flex-col justify-between relative overflow-hidden group">
-              <div className="absolute top-0 right-0 w-24 h-24 bg-indigo-500/5 rounded-full blur-xl group-hover:bg-indigo-500/10 transition" />
+            <div className="bg-[#121824] border border-slate-800/80 rounded-xl p-4 flex flex-col justify-between">
               <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-                <span>Açık Pozisyon Sayısı</span>
-                <Activity className="w-3.5 h-3.5 text-indigo-400" />
-              </div>
-              <div className="text-xl font-bold tracking-tight text-white">
-                {account?.positions.length || 0} Adet
-              </div>
-              <div className="text-[11px] text-slate-400 mt-1">
-                Aktif Varlıklar
-              </div>
-            </div>
-
-            <div className="bg-[#121824] border border-slate-800/80 rounded-xl p-4 flex flex-col justify-between relative overflow-hidden group">
-              <div className="absolute top-0 right-0 w-24 h-24 bg-purple-500/5 rounded-full blur-xl group-hover:bg-purple-500/10 transition" />
-              <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-                <span>AI Otomasyon</span>
-                <Zap className="w-3.5 h-3.5 text-amber-400" />
+                <span>Otomatik Bot Durumu</span>
+                <Bot className="w-3.5 h-3.5 text-amber-400" />
               </div>
               <div className="flex items-center gap-2">
-                <span className={`text-sm font-bold ${autoTradeEnabled ? 'text-emerald-400' : 'text-slate-400'}`}>
-                  {autoTradeEnabled ? 'OTO-ALIM AÇIK' : 'MANUEL / ONAYLI'}
+                <span className={`text-sm font-bold ${isBotRunning ? 'text-emerald-400 animate-pulse' : 'text-slate-400'}`}>
+                  {isBotRunning ? `BOT AKTİF (${botCountdown}s)` : 'DURDURULDU'}
                 </span>
               </div>
-              <button
-                onClick={() => setAutoTradeEnabled(!autoTradeEnabled)}
-                className="text-[11px] text-indigo-400 hover:text-indigo-300 underline text-left mt-1"
-              >
-                {autoTradeEnabled ? 'Kapatmak için tıkla' : 'Otomatik emri aç'}
-              </button>
+              <div className="text-[11px] text-slate-400 mt-1">
+                {orders.filter(o => o.executedBy === 'AI').length} AI Emri Verildi
+              </div>
             </div>
           </div>
 
           {/* Symbol Selectors & Price Display Card */}
           <div className="bg-[#121824] border border-slate-800/80 rounded-2xl p-5 shadow-lg flex flex-col gap-5">
-            {/* Quick Symbol Pills */}
             <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-800">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-xs font-medium text-slate-400 mr-1">Hızlı Sembol:</span>
@@ -400,11 +449,10 @@ export default function TradingDashboard() {
                 ))}
               </div>
 
-              {/* Custom Symbol Input */}
               <div className="flex items-center gap-2">
                 <input
                   type="text"
-                  placeholder="Sembol gir..."
+                  placeholder="Sembol..."
                   value={symbol}
                   onChange={(e) => setSymbol(e.target.value.toUpperCase())}
                   className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white uppercase focus:outline-none focus:border-indigo-500 w-28"
@@ -467,7 +515,7 @@ export default function TradingDashboard() {
             {marketData?.history && marketData.history.length > 0 && (
               <div className="mt-2 pt-4 border-t border-slate-800/80">
                 <div className="flex items-center justify-between text-[11px] text-slate-400 mb-2">
-                  <span>24 Saatlik Fiyat Eğrisi (1H Barlar)</span>
+                  <span>24 Saatlik Fiyat Eğrisi (Saatlik Barlar)</span>
                   <span className="text-indigo-400 font-mono">Canlı Akış</span>
                 </div>
                 <div className="h-28 w-full flex items-end gap-1.5 pt-2">
@@ -491,7 +539,6 @@ export default function TradingDashboard() {
                               isUp ? 'bg-emerald-500/70 group-hover:bg-emerald-400' : 'bg-rose-500/70 group-hover:bg-rose-400'
                             }`}
                           />
-                          {/* Tooltip */}
                           <div className="absolute bottom-full mb-1 hidden group-hover:flex flex-col items-center z-20 pointer-events-none">
                             <div className="bg-slate-900 border border-slate-700 text-[10px] px-2 py-1 rounded shadow-xl text-white whitespace-nowrap">
                               {item.time}: {currencySymbol}{item.price.toFixed(2)}
@@ -581,7 +628,7 @@ export default function TradingDashboard() {
                   </table>
                 ) : (
                   <div className="py-8 text-center text-slate-400 text-xs">
-                    Henüz açık pozisyon bulunmuyor. Gemini AI tavsiyesiyle veya manuel alım yapabilirsiniz.
+                    Henüz açık pozisyon bulunmuyor. AI botunu başlatarak veya manuel alım yaparak pozisyon açabilirsiniz.
                   </div>
                 )}
               </div>
@@ -628,7 +675,7 @@ export default function TradingDashboard() {
                               {ord.executedBy === 'AI' ? (
                                 <>
                                   <Sparkles className="w-3 h-3 text-indigo-400" />
-                                  <span className="text-indigo-300">Gemini AI</span>
+                                  <span className="text-indigo-300">AI Bot</span>
                                 </>
                               ) : (
                                 <span>Kullanıcı</span>
@@ -654,53 +701,136 @@ export default function TradingDashboard() {
           </div>
         </div>
 
-        {/* Right Column (4 cols): Gemini AI Copilot & Trade Form */}
+        {/* Right Column (4 cols): AI Decision Engine & Continuous Auto-Trading Bot */}
         <div className="lg:col-span-4 flex flex-col gap-6">
 
-          {/* Gemini AI Copilot Box */}
-          <div className="bg-[#121824] border border-indigo-500/30 rounded-2xl p-5 shadow-xl relative overflow-hidden flex flex-col gap-4">
-            <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none" />
-
+          {/* Continuous Auto-Trading Bot Panel */}
+          <div className="bg-[#121824] border border-cyan-500/30 rounded-2xl p-5 shadow-xl relative overflow-hidden flex flex-col gap-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-indigo-400 animate-pulse" />
-                <span className="font-bold text-sm text-white">Gemini AI Karar Motoru</span>
+                <Bot className="w-4 h-4 text-cyan-400 animate-pulse" />
+                <span className="font-bold text-sm text-white">Sürekli Al-Sat Botu</span>
               </div>
-              <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded bg-indigo-900/50 text-indigo-300 border border-indigo-700/50">
-                gemini-1.5-flash
+              <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${isBotRunning ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-slate-800 text-slate-400'}`}>
+                {isBotRunning ? 'ÇALIŞIYOR' : 'DURDU'}
               </span>
             </div>
 
-            {/* Strategy Selector */}
-            <div>
-              <label className="text-xs text-slate-400 block mb-1.5 font-medium">Strateji Modu</label>
-              <select
-                value={strategy}
-                onChange={(e) => setStrategy(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
-              >
-                <option value="momentum">Momentum Takibi (Trend İvmesi)</option>
-                <option value="swing">Swing Trading (Destek/Direnç Dönüşü)</option>
-                <option value="conservative">Konservatif Değer & Risk Kontrolü</option>
-                <option value="scalping">Hızlı Scalping (Kısa Vade)</option>
-              </select>
+            <p className="text-xs text-slate-300">
+              Bot her <strong>{botIntervalSec} saniyede bir</strong> piyasa verisini {aiEngine.toUpperCase()} modeline gönderir, %70 üzeri güven sinyallerinde otomatik al/sat yapar ve kârlılığı ölçer.
+            </p>
+
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div>
+                <label className="text-slate-400 block mb-1">Döngü Süresi</label>
+                <select
+                  value={botIntervalSec}
+                  onChange={(e) => setBotIntervalSec(Number(e.target.value))}
+                  disabled={isBotRunning}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white"
+                >
+                  <option value={10}>10 Saniyede bir (Hızlı)</option>
+                  <option value={15}>15 Saniyede bir (Standart)</option>
+                  <option value={30}>30 Saniyede bir</option>
+                  <option value={60}>60 Saniyede bir (1 Dakika)</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-slate-400 block mb-1">AI Motoru</label>
+                <select
+                  value={aiEngine}
+                  onChange={(e) => setAiEngine(e.target.value as 'gemini' | 'jev')}
+                  disabled={isBotRunning}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white"
+                >
+                  <option value="jev">⚡ TypeSafe Jev (Hızlı)</option>
+                  <option value="gemini">🧠 Gemini 1.5 Flash</option>
+                </select>
+              </div>
             </div>
 
-            {/* Action Trigger Button */}
             <button
-              onClick={runGeminiAnalysis}
+              onClick={() => {
+                if (!isBotRunning && account) {
+                  setInitialEquity(account.equity);
+                }
+                setIsBotRunning(!isBotRunning);
+              }}
+              className={`w-full py-2.5 px-4 rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-lg transition ${
+                isBotRunning
+                  ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/30'
+                  : 'bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-cyan-600/30'
+              }`}
+            >
+              {isBotRunning ? (
+                <>
+                  <Square className="w-3.5 h-3.5 fill-current" />
+                  <span>Botu Durdur ({botCountdown}s kaldı)</span>
+                </>
+              ) : (
+                <>
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  <span>Sürekli Otomatik Al-Sat Başlat</span>
+                </>
+              )}
+            </button>
+
+            {/* Real-time Bot Log Stream */}
+            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 flex flex-col gap-1.5 max-h-40 overflow-y-auto font-mono text-[11px]">
+              <span className="text-slate-400 text-[10px] uppercase font-bold pb-1 border-b border-slate-800">
+                Canlı Bot Log Akışı
+              </span>
+              {botLogs.length > 0 ? (
+                botLogs.map((log, i) => (
+                  <div key={i} className="flex items-start gap-1.5 leading-tight">
+                    <span className="text-slate-500 text-[10px] shrink-0">[{log.time}]</span>
+                    <span
+                      className={
+                        log.type === 'buy'
+                          ? 'text-emerald-400 font-semibold'
+                          : log.type === 'sell'
+                          ? 'text-rose-400 font-semibold'
+                          : 'text-slate-300'
+                      }
+                    >
+                      {log.msg}
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <span className="text-slate-400 text-center py-2">
+                  Bot başlatıldığında al-sat kararları buraya akacaktır.
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* AI Decision Single Analysis Box */}
+          <div className="bg-[#121824] border border-indigo-500/30 rounded-2xl p-5 shadow-xl relative overflow-hidden flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-indigo-400 animate-pulse" />
+                <span className="font-bold text-sm text-white">Manuel AI Analizi</span>
+              </div>
+              <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded bg-indigo-900/50 text-indigo-300 border border-indigo-700/50">
+                {aiEngine === 'jev' ? 'TypeSafe Jev' : 'gemini-1.5-flash'}
+              </span>
+            </div>
+
+            <button
+              onClick={() => runAIAnalysis()}
               disabled={isAnalyzing || !marketData}
               className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-600 via-violet-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/30 transition disabled:opacity-50"
             >
               {isAnalyzing ? (
                 <>
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>Gemini Piyasa Analizi Yapıyor...</span>
+                  <span>Piyasa Analiz Ediliyor...</span>
                 </>
               ) : (
                 <>
                   <Cpu className="w-4 h-4" />
-                  <span>Gemini AI Analizi Başlat ({marketData?.symbol || symbol})</span>
+                  <span>Tek Seferlik AI Analiz Et ({marketData?.symbol || symbol})</span>
                 </>
               )}
             </button>
@@ -728,12 +858,10 @@ export default function TradingDashboard() {
                   </div>
                 </div>
 
-                {/* Reasoning Box */}
                 <div className="text-xs text-slate-300 bg-slate-950/60 p-3 rounded-lg border border-slate-800/80 leading-relaxed">
                   <p>{aiAnalysis.reasoning}</p>
                 </div>
 
-                {/* Key Price Targets */}
                 <div className="grid grid-cols-2 gap-2 text-[11px] pt-1">
                   <div className="bg-slate-800/50 p-2 rounded">
                     <span className="text-slate-400 block">Hedef Fiyat</span>
@@ -743,17 +871,8 @@ export default function TradingDashboard() {
                     <span className="text-slate-400 block">Stop Loss</span>
                     <span className="font-semibold text-rose-400">{currencySymbol}{aiAnalysis.stopLoss}</span>
                   </div>
-                  <div className="bg-slate-800/50 p-2 rounded">
-                    <span className="text-slate-400 block">Destek</span>
-                    <span className="font-semibold text-slate-200">{currencySymbol}{aiAnalysis.keyIndicators.support}</span>
-                  </div>
-                  <div className="bg-slate-800/50 p-2 rounded">
-                    <span className="text-slate-400 block">Direnç</span>
-                    <span className="font-semibold text-slate-200">{currencySymbol}{aiAnalysis.keyIndicators.resistance}</span>
-                  </div>
                 </div>
 
-                {/* Quick Execute Button */}
                 {aiAnalysis.action !== 'HOLD' && (
                   <button
                     onClick={() => handleExecuteOrder(aiAnalysis.action as 'BUY' | 'SELL', aiAnalysis.suggestedQuantity, 'AI')}
@@ -765,13 +884,13 @@ export default function TradingDashboard() {
                     }`}
                   >
                     <Check className="w-3.5 h-3.5" />
-                    <span>Gemini Kararını Uygula ({aiAnalysis.action} {aiAnalysis.suggestedQuantity} Adet)</span>
+                    <span>Emri Uygula ({aiAnalysis.action} {aiAnalysis.suggestedQuantity} Adet)</span>
                   </button>
                 )}
               </div>
             ) : (
-              <div className="bg-slate-900/40 border border-dashed border-slate-800 rounded-xl p-6 text-center text-xs text-slate-400">
-                Henüz analiz başlatılmadı. Yukarıdaki butona tıklayarak Gemini AI kararını alın.
+              <div className="bg-slate-900/40 border border-dashed border-slate-800 rounded-xl p-4 text-center text-xs text-slate-400">
+                Analiz sonucu burada görüntülenecektir.
               </div>
             )}
           </div>
@@ -826,7 +945,7 @@ export default function TradingDashboard() {
       {/* Settings Modal */}
       {showSettings && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#121824] border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl flex flex-col gap-4">
+          <div className="bg-[#121824] border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl flex flex-col gap-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
               <h2 className="text-base font-bold text-white flex items-center gap-2">
                 <Settings className="w-4 h-4 text-indigo-400" />
@@ -838,10 +957,21 @@ export default function TradingDashboard() {
             </div>
 
             <p className="text-xs text-slate-300">
-              Buraya gireceğiniz anahtarlar yalnızca tarayıcınızda (localStorage) saklanır. Vercel deployment&apos;ı için bu değişkenleri Vercel Dashboard Environment Variables paneline ekleyebilirsiniz.
+              Anahtarlarınız tarayıcı yerel hafızasında saklanır. Vercel deployment&apos;ı için Environment Variables bölümüne de ekleyebilirsiniz.
             </p>
 
             <div className="flex flex-col gap-3 text-xs">
+              <div>
+                <label className="text-slate-400 block mb-1 font-medium">TypeSafe Jev API Key (System One)</label>
+                <input
+                  type="password"
+                  value={jevKey}
+                  onChange={(e) => setJevKey(e.target.value)}
+                  placeholder="ts_live_..."
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white font-mono"
+                />
+              </div>
+
               <div>
                 <label className="text-slate-400 block mb-1 font-medium">Google Gemini API Key</label>
                 <input
@@ -849,7 +979,7 @@ export default function TradingDashboard() {
                   value={geminiKey}
                   onChange={(e) => setGeminiKey(e.target.value)}
                   placeholder="AIzaSy..."
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-white font-mono"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white font-mono"
                 />
               </div>
 
@@ -931,7 +1061,7 @@ export default function TradingDashboard() {
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
               <h2 className="text-base font-bold text-white flex items-center gap-2">
                 <HelpCircle className="w-4 h-4 text-cyan-400" />
-                <span>Testnet API & Vercel Kurulum Rehberi</span>
+                <span>API Anahtarları & Bot Nasıl Çalışır?</span>
               </h2>
               <button onClick={() => setShowGuide(false)} className="text-slate-400 hover:text-white">
                 <X className="w-4 h-4" />
@@ -940,48 +1070,35 @@ export default function TradingDashboard() {
 
             <div className="space-y-4 text-xs text-slate-300 leading-relaxed">
               <div className="bg-slate-900/80 p-3.5 rounded-xl border border-slate-800">
-                <h4 className="font-bold text-indigo-400 mb-1 flex items-center gap-1.5">
-                  <span>1. Google Gemini API Key Alımı</span>
-                </h4>
+                <h4 className="font-bold text-cyan-400 mb-1">1. TypeSafe Jev API Nedir ve Nasıl Alınır?</h4>
                 <p>
-                  Ücretsiz Google AI Studio sayfasına gidin (<strong>aistudio.google.com</strong>), Google hesabınızla giriş yapın ve <strong>Get API Key</strong> butonuna basarak ücretsiz anahtarınızı kopyalayın.
+                  <strong>TypeSafe Jev</strong> (OpenAI eski araştırmacısı Diogo Almeida tarafından geliştirilen), metin üretmek yerine milisaniyeler (70-100ms) içinde doğrudan kalibre edilmiş olasılıklarla al/sat kararı üreten bir System-1 karar motorudur. <strong>typesafe.ai</strong> üzerinden API erişimi alınabilir.
                 </p>
               </div>
 
               <div className="bg-slate-900/80 p-3.5 rounded-xl border border-slate-800">
-                <h4 className="font-bold text-blue-400 mb-1 flex items-center gap-1.5">
-                  <span>2. Alpaca Paper Trading ($100k Sanal Nasdaq)</span>
-                </h4>
+                <h4 className="font-bold text-blue-400 mb-1">2. Alpaca Paper Trading ($100,000 Sanal Nasdaq)</h4>
                 <p>
-                  <strong>app.alpaca.markets</strong> üzerinden ücretsiz hesap açın. Sol menüden &apos;Paper Trading&apos; moduna geçin. Dashboard ekranında &apos;API Keys&apos; bölümünden &apos;Generate New Key&apos; diyerek Key ve Secret alın.
+                  1. <strong>app.alpaca.markets</strong> adresinde ücretsiz hesap oluşturun.<br/>
+                  2. Sol menüde &apos;Live Trading&apos; yerine <strong>Paper Trading</strong> seçin.<br/>
+                  3. Dashboard&apos;daki &apos;API Keys&apos; bölümünden <strong>Generate New Key</strong> yapın. Anında $100k sanal bakiye tanımlanır.
                 </p>
               </div>
 
               <div className="bg-slate-900/80 p-3.5 rounded-xl border border-slate-800">
-                <h4 className="font-bold text-amber-400 mb-1 flex items-center gap-1.5">
-                  <span>3. Binance Spot Testnet (Sanal Kripto)</span>
-                </h4>
+                <h4 className="font-bold text-amber-400 mb-1">3. Binance Spot Testnet (Sanal Kripto)</h4>
                 <p>
-                  <strong>testnet.binance.vision</strong> adresine gidin. GitHub hesabınızla giriş yapın. Ekranda size özel üretilen <strong>API Key</strong> ve <strong>Secret Key</strong>&apos;i kopyalayın.
+                  1. <strong>testnet.binance.vision</strong> adresini açın.<br/>
+                  2. <strong>Log In with GitHub</strong> ile tek tıkla giriş yapın.<br/>
+                  3. <strong>Generate HMAC_SHA256 Key</strong> butonuna basarak API Key ve Secret Key alın.
                 </p>
               </div>
 
               <div className="bg-slate-900/80 p-3.5 rounded-xl border border-slate-800">
-                <h4 className="font-bold text-emerald-400 mb-1 flex items-center gap-1.5">
-                  <span>4. Vercel&apos;e Deploy Etme Adımları</span>
-                </h4>
-                <ol className="list-decimal pl-4 space-y-1 mt-1 text-slate-300">
-                  <li>Bu klasörü GitHub reponuza push edin: <code>git add . && git commit -m &quot;feat: ai trading terminal&quot; && git push</code></li>
-                  <li><strong>vercel.com</strong> paneline gidin ve repoyu import edin.</li>
-                  <li><strong>Environment Variables</strong> bölümüne şunları ekleyin:
-                    <ul className="list-disc pl-4 mt-1 font-mono text-[11px] text-slate-400">
-                      <li>GEMINI_API_KEY</li>
-                      <li>ALPACA_API_KEY & ALPACA_API_SECRET</li>
-                      <li>BINANCE_API_KEY & BINANCE_API_SECRET</li>
-                    </ul>
-                  </li>
-                  <li><strong>Deploy</strong> butonuna basın. Projeniz Vercel&apos;de canlıya geçecektir!</li>
-                </ol>
+                <h4 className="font-bold text-emerald-400 mb-1">4. Sürekli Al-Sat Botu ve Kârlılık Takibi</h4>
+                <p>
+                  Bot aktif edildiğinde seçtiğiniz periyotta (örn: 15s) fiyatları okur, modeli çağırır ve uygun fırsat bulduğunda testnet üzerinden pozisyon açar/kapatır. Üst bardaki <strong>Net Kar / Zarar (Bot PnL)</strong> kutusundan botun kâra geçip geçmediğini anlık takip edebilirsiniz.
+                </p>
               </div>
             </div>
 
@@ -990,7 +1107,7 @@ export default function TradingDashboard() {
                 onClick={() => setShowGuide(false)}
                 className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 transition"
               >
-                Anladım
+                Kapat
               </button>
             </div>
           </div>
