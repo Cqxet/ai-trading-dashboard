@@ -3,13 +3,16 @@ import { MarketData, AccountInfo, TradeOrder } from '@/types/trading';
 
 const BINANCE_TESTNET_BASE = 'https://testnet.binance.vision';
 
-// In-memory demo balances & orders fallback if no real keys
-let demoBinanceCash = 10000; // 10,000 USDT
-let demoBinancePositions: { [symbol: string]: { qty: number; entryPrice: number } } = {
-  BTCUSDT: { qty: 0.15, entryPrice: 64200 },
-  ETHUSDT: { qty: 1.5, entryPrice: 3450 },
-};
+// In-memory demo balances & orders fallback (10 USDT fixed realistic starter balance)
+let demoBinanceCash = 10.0; // 10 USDT sabit başlangıç bakiyesi
+let demoBinancePositions: { [symbol: string]: { qty: number; entryPrice: number } } = {};
 let demoBinanceOrders: TradeOrder[] = [];
+
+export function resetBinanceDemoBalance(): void {
+  demoBinanceCash = 10.0;
+  demoBinancePositions = {};
+  demoBinanceOrders = [];
+}
 
 export async function getBinanceMarketData(symbol: string): Promise<MarketData> {
   const formattedSymbol = symbol.toUpperCase().replace('/', '').replace('-', '');
@@ -220,26 +223,40 @@ export async function executeBinanceTrade(
     }
   }
 
-  // Simulated Demo execution
-  const totalCost = quantity * tradePrice;
+  // Simulated Demo execution (Scaled for 10 USDT starting balance)
+  let actualQty = quantity;
+  let totalCost = actualQty * tradePrice;
+
   if (side === 'BUY') {
+    if (demoBinanceCash < 0.50) {
+      throw new Error(`Yetersiz bakiye: Güncel nakit $${demoBinanceCash.toFixed(2)} USDT. Yeni pozisyon açılamaz.`);
+    }
+    // Cap buy cost to available cash (max 95% of cash)
+    if (totalCost > demoBinanceCash) {
+      totalCost = demoBinanceCash * 0.95;
+      actualQty = parseFloat((totalCost / tradePrice).toFixed(6));
+    }
     demoBinanceCash = Math.max(0, demoBinanceCash - totalCost);
     if (!demoBinancePositions[formattedSymbol]) {
-      demoBinancePositions[formattedSymbol] = { qty: quantity, entryPrice: tradePrice };
+      demoBinancePositions[formattedSymbol] = { qty: actualQty, entryPrice: tradePrice };
     } else {
       const prev = demoBinancePositions[formattedSymbol];
-      const newQty = prev.qty + quantity;
-      const newAvg = (prev.qty * prev.entryPrice + quantity * tradePrice) / newQty;
+      const newQty = prev.qty + actualQty;
+      const newAvg = (prev.qty * prev.entryPrice + actualQty * tradePrice) / newQty;
       demoBinancePositions[formattedSymbol] = { qty: newQty, entryPrice: newAvg };
     }
   } else {
     // SELL
+    const currentHolding = demoBinancePositions[formattedSymbol]?.qty || 0;
+    if (currentHolding <= 0) {
+      throw new Error(`${formattedSymbol} için satılacak açık pozisyon bulunamadı.`);
+    }
+    actualQty = Math.min(actualQty, currentHolding);
+    totalCost = actualQty * tradePrice;
     demoBinanceCash += totalCost;
-    if (demoBinancePositions[formattedSymbol]) {
-      demoBinancePositions[formattedSymbol].qty = Math.max(0, demoBinancePositions[formattedSymbol].qty - quantity);
-      if (demoBinancePositions[formattedSymbol].qty <= 0) {
-        delete demoBinancePositions[formattedSymbol];
-      }
+    demoBinancePositions[formattedSymbol].qty = Math.max(0, currentHolding - actualQty);
+    if (demoBinancePositions[formattedSymbol].qty <= 0.000001) {
+      delete demoBinancePositions[formattedSymbol];
     }
   }
 
@@ -247,13 +264,13 @@ export async function executeBinanceTrade(
     id: `sim-bin-${Date.now()}`,
     symbol: formattedSymbol,
     side,
-    quantity,
+    quantity: actualQty,
     price: tradePrice,
     status: 'FILLED',
     timestamp: new Date().toISOString(),
     executedBy,
     exchange: 'binance',
-    notes: 'Simulated on Binance Spot Testnet (Zero Risk)',
+    notes: 'Binance 10 USDT Sandbox Mikro Al-Sat',
   };
 
   demoBinanceOrders.unshift(order);

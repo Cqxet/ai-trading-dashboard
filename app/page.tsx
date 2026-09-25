@@ -155,9 +155,25 @@ export default function TradingDashboard() {
     setExchange(newExchange);
     const newSymbol = newExchange === 'nasdaq' ? 'AAPL' : 'BTCUSDT';
     setSymbol(newSymbol);
-    setOrderQuantity(newExchange === 'nasdaq' ? '5' : '0.05');
+    setOrderQuantity(newExchange === 'nasdaq' ? '5' : '0.00003');
     setAiAnalysis(null);
     setInitialEquity(null);
+  };
+
+  const handleResetBinanceBalance = async () => {
+    try {
+      const res = await fetch('/api/binance/account', { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        setAccount(data);
+        setInitialEquity(10.0);
+        setOrders([]);
+        setTradeNotice('Binance bakiyesi başarıyla 10.00 USDT olarak sıfırlandı.');
+        setTimeout(() => setTradeNotice(null), 4000);
+      }
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   useEffect(() => {
@@ -380,12 +396,21 @@ export default function TradingDashboard() {
                 <span>Toplam Bakiye (Equity)</span>
                 <Wallet className="w-3.5 h-3.5 text-blue-400" />
               </div>
-              <div className="text-xl font-bold tracking-tight text-white">
-                {account ? `${currencySymbol}${account.equity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '...'}
+              <div className="text-xl font-bold tracking-tight text-white flex items-baseline justify-between">
+                <span>{account ? `${currencySymbol}${account.equity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '...'}</span>
+                {exchange === 'binance' && (
+                  <button
+                    onClick={handleResetBinanceBalance}
+                    title="Bakiyeyi $10'a Sıfırla"
+                    className="text-[10px] text-cyan-400 hover:text-cyan-300 bg-cyan-950/60 border border-cyan-800/60 px-2 py-0.5 rounded font-normal"
+                  >
+                    10$&apos;a Sıfırla
+                  </button>
+                )}
               </div>
               <div className="text-[11px] text-emerald-400 mt-1 flex items-center gap-1">
                 <ShieldCheck className="w-3 h-3" />
-                <span>{account?.isDemo ? 'Sandbox Test Bakiyesi' : 'Canlı Testnet'}</span>
+                <span>{account?.isDemo ? '10$ Sandbox Modu' : 'Canlı Testnet'}</span>
               </div>
             </div>
 

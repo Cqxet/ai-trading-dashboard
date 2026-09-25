@@ -112,10 +112,10 @@ Respond strictly with a valid JSON object matching this schema:
   const targetPrice = action === 'BUY' ? parseFloat((price * 1.05).toFixed(2)) : parseFloat((price * 0.95).toFixed(2));
   const stopLoss = action === 'BUY' ? parseFloat((price * 0.97).toFixed(2)) : parseFloat((price * 1.03).toFixed(2));
 
-  // Suggested quantity depending on exchange
+  // Suggested quantity depending on exchange ($2.00 micro trade for $10 Binance balance)
   const suggestedQty = exchange === 'nasdaq' 
     ? (price > 300 ? 5 : 10) 
-    : (price > 10000 ? 0.05 : (price > 1000 ? 0.5 : 10));
+    : parseFloat(Math.max(0.00001, 2.0 / price).toFixed(6));
 
   return {
     action,

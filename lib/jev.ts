@@ -83,7 +83,7 @@ export async function analyzeMarketWithJev(
 
         const suggestedQty = exchange === 'nasdaq'
           ? (price > 300 ? 5 : 10)
-          : (price > 10000 ? 0.05 : (price > 1000 ? 0.5 : 10));
+          : parseFloat(Math.max(0.00001, 2.0 / price).toFixed(6)); // ~$2.00 mikro işlem ($10 başlangıç bakiyesi için)
 
         return {
           action: actionResult as 'BUY' | 'SELL' | 'HOLD',
@@ -132,7 +132,7 @@ export async function analyzeMarketWithJev(
 
   const suggestedQty = exchange === 'nasdaq'
     ? (price > 300 ? 5 : 10)
-    : (price > 10000 ? 0.05 : (price > 1000 ? 0.5 : 10));
+    : parseFloat(Math.max(0.00001, 2.0 / price).toFixed(6)); // ~$2.00 mikro işlem ($10 başlangıç bakiyesi için)
 
   return {
     action,
