@@ -632,11 +632,16 @@ export default function TradingDashboard() {
         const openPos = currentW.positions.find((p) => p.symbol === tick.symbol);
         if (openPos && openPos.quantity > 0) {
           const uPnLPct = ((tick.price / openPos.averageEntryPrice) - 1) * 100;
-          // Ultra-Responsive Scalping Exit:
-          // Take-Profit: +1.2% (Quick turnover so bot can buy again)
-          // Stop-Loss: -1.8%
-          if (uPnLPct <= -1.8 || uPnLPct >= 1.2) {
-            const isStop = uPnLPct <= -1.8;
+          // Official Binance spot fee is 0.1% buy + 0.1% sell = 0.20% total round-trip fee.
+          // Slippage is 0.025% buy + 0.025% sell = 0.05% total round-trip slippage.
+          // Total cost barrier = 0.25%.
+          // Therefore:
+          // 1. Take Profit must be >= +0.85% (clearing fees + slippage with healthy net profit)
+          // 2. Stop Loss is -1.75%
+          const isTakeProfit = uPnLPct >= 0.85;
+          const isStopLoss = uPnLPct <= -1.75;
+
+          if (isTakeProfit || isStopLoss) {
             const sellRes = executeSimulationSell(currentW, tick.symbol, openPos.quantity, tick.price, 'JEV_BOT');
             if (sellRes.success && sellRes.trade) {
               simWalletRef.current = sellRes.wallet;
@@ -644,11 +649,11 @@ export default function TradingDashboard() {
               // Clear signal state so this symbol can be bought again on next fresh dip
               delete lastSignalStateRef.current[tick.symbol];
               const pnl = sellRes.trade.realizedPnL || 0;
-              const logMsg = isStop
-                ? `${tick.symbol} | STOP LOSS TETIKLENDI (%${uPnLPct.toFixed(2)}) | Net P&L: USDT ${pnl.toFixed(4)}`
-                : `${tick.symbol} | KAR AL (TAKE PROFIT) (%+${uPnLPct.toFixed(2)}) | Net P&L: USDT ${pnl.toFixed(4)}`;
+              const logMsg = isStopLoss
+                ? `${tick.symbol} | STOP LOSS (%${uPnLPct.toFixed(2)}) | Net: USDT ${pnl.toFixed(4)}`
+                : `${tick.symbol} | KAR ALINDI (%+${uPnLPct.toFixed(2)}) | Komisyon Düşülmüş Net Kâr: USDT +${pnl.toFixed(4)}`;
               setBotLogs((l) => [
-                { time: new Date().toLocaleTimeString(), msg: logMsg, type: isStop ? 'sell' : 'buy' },
+                { time: new Date().toLocaleTimeString(), msg: logMsg, type: isStopLoss ? 'sell' : 'buy' },
                 ...l.slice(0, 29),
               ]);
             }
@@ -724,8 +729,11 @@ export default function TradingDashboard() {
     const jevSupervisorTimer = setInterval(async () => {
       try {
         const targetSym = engineStats.watchlist[0] || symbol;
-        const mkt = await fetchMarketData(targetSym, timeframe);
-        if (mkt) {
+        const res = await fetch(`/api/binance/market?symbol=${targetSym}&timeframe=${timeframe}`, {
+          headers: getHeaders(),
+        });
+        if (res.ok) {
+          const mkt: MarketData = await res.json();
           const analysis = await runAIAnalysis(mkt);
           if (analysis) {
             const newState: StrategySupervisorState = {
@@ -897,6 +905,18 @@ export default function TradingDashboard() {
             } else if (sig.action === 'SELL' && riskDecision.permitted) {
               const openPos = currentW.positions.find((p) => p.symbol === sym);
               if (openPos && openPos.quantity > 0) {
+                const uPnLPct = ((realPrice / openPos.averageEntryPrice) - 1) * 100;
+                // Cost barrier check: Ensure we don't sell at flat 0% or break-even just because indicator oscillated,
+                // UNLESS it is an actual Stop Loss (-1.5%) or profitable Take Profit (+0.6% or above to cover 0.2% fee).
+                const feeAndSlippageCost = 0.25; // 0.2% fee + 0.05% slippage
+                const isProfitableExit = uPnLPct >= 0.60;
+                const isDefensiveStop = uPnLPct <= -1.50;
+
+                if (!isProfitableExit && !isDefensiveStop) {
+                  // Skip closing position to prevent commission churn!
+                  continue;
+                }
+
                 const sellRes = executeSimulationSell(
                   currentW,
                   sym,
@@ -1314,66 +1334,89 @@ export default function TradingDashboard() {
             </div>
 
             {/* Real Candlestick Chart from Live Market Data */}
-            {marketData?.candles && marketData.candles.length > 0 && (
-              <div className="mt-2 pt-4 border-t border-slate-800/80">
-                <div className="flex items-center justify-between text-[11px] text-slate-400 mb-2">
-                  <span>Gerçek Mum / Candle Grafiği ({timeframe} Periyot)</span>
-                  <span className="text-emerald-400 font-mono text-[10px]">
-                    Kaynak: {marketData.source} ({marketData.candles.length} mum)
-                  </span>
-                </div>
+            {marketData?.candles && marketData.candles.length > 0 && (() => {
+              const candles = marketData.candles;
+              const min = Math.min(...candles.map(c => c.low));
+              const max = Math.max(...candles.map(c => c.high));
+              const range = max - min || 1;
+              const mid = min + range / 2;
 
-                <div className="h-32 w-full flex items-end gap-1 pt-2">
-                  {(() => {
-                    const candles = marketData.candles;
-                    const min = Math.min(...candles.map(c => c.low));
-                    const max = Math.max(...candles.map(c => c.high));
-                    const range = max - min || 1;
+              return (
+                <div className="mt-2 pt-4 border-t border-slate-800/80">
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 mb-2">
+                    <span className="font-semibold text-slate-300">Gerçek Mum Grafiği ({timeframe}) — {candles.length} Mum</span>
+                    <span className="text-emerald-400 font-mono text-[10px]">
+                      Kaynak: {marketData.source} (Min: {currencySymbol}{min.toLocaleString()} | Max: {currencySymbol}{max.toLocaleString()})
+                    </span>
+                  </div>
 
-                    return candles.map((c, idx) => {
-                      const isUp = c.close >= c.open;
-                      const wickBottom = ((c.low - min) / range) * 100;
-                      const wickHeight = Math.max(2, ((c.high - c.low) / range) * 100);
+                  <div className="relative flex">
+                    {/* Y-Axis Price Scale */}
+                    <div className="flex flex-col justify-between text-[9px] font-mono text-slate-500 pr-2 border-r border-slate-800/80 select-none py-1 h-36">
+                      <span>{currencySymbol}{max.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                      <span>{currencySymbol}{mid.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                      <span>{currencySymbol}{min.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                    </div>
 
-                      const bodyBottom = ((Math.min(c.open, c.close) - min) / range) * 100;
-                      const bodyHeight = Math.max(3, (Math.abs(c.close - c.open) / range) * 100);
+                    {/* Chart Container */}
+                    <div className="h-36 flex-1 flex items-end gap-1 pl-2 relative">
+                      {/* Grid Lines */}
+                      <div className="absolute inset-x-2 top-0 border-b border-slate-800/40 pointer-events-none" />
+                      <div className="absolute inset-x-2 top-1/2 border-b border-slate-800/40 pointer-events-none" />
+                      <div className="absolute inset-x-2 bottom-0 border-b border-slate-800/40 pointer-events-none" />
 
-                      return (
-                        <div
-                          key={idx}
-                          className="flex-1 relative h-full flex items-end justify-center group"
-                        >
-                          {/* Candle Wick */}
+                      {candles.map((c, idx) => {
+                        const isUp = c.close >= c.open;
+                        const wickBottom = ((c.low - min) / range) * 100;
+                        const wickHeight = Math.max(2, ((c.high - c.low) / range) * 100);
+
+                        const bodyBottom = ((Math.min(c.open, c.close) - min) / range) * 100;
+                        const bodyHeight = Math.max(3, (Math.abs(c.close - c.open) / range) * 100);
+
+                        return (
                           <div
-                            style={{ bottom: `${wickBottom}%`, height: `${wickHeight}%` }}
-                            className={`absolute w-[1.5px] ${isUp ? 'bg-emerald-400/80' : 'bg-rose-400/80'}`}
-                          />
-                          {/* Candle Body */}
-                          <div
-                            style={{ bottom: `${bodyBottom}%`, height: `${bodyHeight}%` }}
-                            className={`w-full max-w-[8px] rounded-xs transition-all ${
-                              isUp ? 'bg-emerald-500 group-hover:bg-emerald-400' : 'bg-rose-500 group-hover:bg-rose-400'
-                            }`}
-                          />
-                          {/* Hover Tooltip */}
-                          <div className="absolute bottom-full mb-1 hidden group-hover:flex flex-col items-center z-30 pointer-events-none">
-                            <div className="bg-slate-900 border border-slate-700 text-[10px] p-2 rounded shadow-2xl text-white whitespace-nowrap font-mono space-y-0.5">
-                              <div className="text-slate-400">{c.time}</div>
-                              <div>Açılış: {currencySymbol}{c.open}</div>
-                              <div>Yüksek: {currencySymbol}{c.high}</div>
-                              <div>Düşük: {currencySymbol}{c.low}</div>
-                              <div className={isUp ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
-                                Kapanış: {currencySymbol}{c.close}
+                            key={idx}
+                            className="flex-1 relative h-full flex items-end justify-center group"
+                          >
+                            {/* Candle Wick */}
+                            <div
+                              style={{ bottom: `${wickBottom}%`, height: `${wickHeight}%` }}
+                              className={`absolute w-[1.5px] ${isUp ? 'bg-emerald-400/80' : 'bg-rose-400/80'}`}
+                            />
+                            {/* Candle Body */}
+                            <div
+                              style={{ bottom: `${bodyBottom}%`, height: `${bodyHeight}%` }}
+                              className={`w-full max-w-[8px] rounded-xs transition-all ${
+                                isUp ? 'bg-emerald-500 group-hover:bg-emerald-400' : 'bg-rose-500 group-hover:bg-rose-400'
+                              }`}
+                            />
+                            {/* Hover Tooltip */}
+                            <div className="absolute bottom-full mb-1 hidden group-hover:flex flex-col items-center z-30 pointer-events-none">
+                              <div className="bg-slate-900 border border-slate-700 text-[10px] p-2 rounded shadow-2xl text-white whitespace-nowrap font-mono space-y-0.5">
+                                <div className="text-slate-400">{c.time}</div>
+                                <div>Açılış: {currencySymbol}{c.open}</div>
+                                <div>Yüksek: {currencySymbol}{c.high}</div>
+                                <div>Düşük: {currencySymbol}{c.low}</div>
+                                <div className={isUp ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                                  Kapanış: {currencySymbol}{c.close}
+                                </div>
                               </div>
                             </div>
                           </div>
-                        </div>
-                      );
-                    });
-                  })()}
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* X-Axis Time Preview */}
+                  <div className="flex justify-between text-[9px] font-mono text-slate-500 mt-1 pl-12">
+                    <span>{candles[0]?.time || ''}</span>
+                    <span>{candles[Math.floor(candles.length / 2)]?.time || ''}</span>
+                    <span>{candles[candles.length - 1]?.time || 'Şimdi'}</span>
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
           </div>
 
           {/* Positions & Orders Table */}
