@@ -12,6 +12,7 @@ class BinanceStreamManager {
   private reconnectTimer: any = null;
   private activeStreams: string = '';
   private lastPrices: Map<string, number> = new Map();
+  private reconnectAttempts: number = 0;
 
   constructor() {}
 
@@ -30,6 +31,7 @@ class BinanceStreamManager {
   }
 
   public setWatchlist(newSymbols: string[]): void {
+    if (!newSymbols || newSymbols.length === 0) return;
     const formatted = newSymbols.map((s) => s.toUpperCase().trim());
     const set = new Set(formatted);
     // Check if changed
@@ -60,6 +62,7 @@ class BinanceStreamManager {
   }
 
   private notifyStatus(status: 'CONNECTED' | 'RECONNECTING' | 'DISCONNECTED'): void {
+    console.log(`[WS] ${status}`);
     this.statusListeners.forEach((cb) => {
       try {
         cb(status);
@@ -84,9 +87,15 @@ class BinanceStreamManager {
       this.ws = null;
     }
     this.notifyStatus('RECONNECTING');
+
+    // Exponential reconnect backoff: 1s, 2s, 5s, 10s
+    const delays = [1000, 2000, 5000, 10000];
+    const delay = delays[Math.min(this.reconnectAttempts, delays.length - 1)];
+    this.reconnectAttempts += 1;
+
     this.reconnectTimer = setTimeout(() => {
       this.connect();
-    }, 500);
+    }, delay);
   }
 
   private connect(): void {
@@ -94,7 +103,6 @@ class BinanceStreamManager {
     this.isConnecting = true;
 
     try {
-      // Build combined stream query: e.g. btcusdt@ticker/ethusdt@ticker/solusdt@ticker
       const streams = Array.from(this.symbols)
         .map((s) => `${s.toLowerCase()}@ticker`)
         .join('/');
@@ -107,6 +115,7 @@ class BinanceStreamManager {
 
       socket.onopen = () => {
         this.isConnecting = false;
+        this.reconnectAttempts = 0;
         this.notifyStatus('CONNECTED');
       };
 
@@ -149,13 +158,7 @@ class BinanceStreamManager {
       socket.onclose = () => {
         this.isConnecting = false;
         this.notifyStatus('RECONNECTING');
-        // Auto-reconnect with backoff
-        if (!this.reconnectTimer) {
-          this.reconnectTimer = setTimeout(() => {
-            this.reconnectTimer = null;
-            this.connect();
-          }, 3000);
-        }
+        this.reconnect();
       };
     } catch (e) {
       this.isConnecting = false;

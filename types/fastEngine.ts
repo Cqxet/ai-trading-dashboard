@@ -1,5 +1,21 @@
 import { Candle } from './trading';
 
+export type BotStopReason =
+  | 'USER_STOPPED'
+  | 'MARKET_DATA_STALE'
+  | 'WEBSOCKET_DISCONNECTED'
+  | 'JEV_ERROR'
+  | 'JEV_TIMEOUT'
+  | 'MARKET_API_ERROR'
+  | 'RISK_LIMIT'
+  | 'BALANCE_DEPLETED'
+  | 'MAX_TRADES_LIMIT'
+  | 'INTERNAL_ERROR'
+  | 'COMPONENT_UNMOUNT'
+  | 'NONE';
+
+export type BotRunStatus = 'RUNNING' | 'PAUSED' | 'STOPPED' | 'RECONNECTING';
+
 export interface MarketTick {
   symbol: string;
   price: number;
@@ -42,10 +58,14 @@ export interface StrategySupervisorState {
   minConfidence: number;
   lastUpdated: number;
   reasoning: string;
+  status?: 'OK' | 'DEGRADED';
 }
 
 export interface EngineStats {
   engineMode: 'ULTRA FAST SIMULATION';
+  botStatus: BotRunStatus;
+  stopReason: BotStopReason;
+  pauseReason?: string;
   marketStreamStatus: 'CONNECTED' | 'RECONNECTING' | 'DISCONNECTED';
   fastLoopIntervalMs: number;
   scannerIntervalSec: number;
@@ -56,6 +76,11 @@ export interface EngineStats {
   tradesCount: number;
   engineLatencyMs: number;
   lastTickTimestamp: number;
+  lastSignalTimestamp: number;
+  lastJevSuccessTimestamp: number;
+  lastTradeTimestamp: number;
+  engineStartedAt: number;
+  engineUptimeSec: number;
   activeTarget: {
     symbol: string;
     mode: 'SPOT' | 'FUTURES';
