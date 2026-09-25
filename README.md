@@ -1,36 +1,79 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 📈 QuantGemini AI Trading Terminal (Nasdaq & Binance Testnet)
 
-## Getting Started
+Google Gemini AI destekli, **Nasdaq (Alpaca Paper Trading)** ve **Binance Spot Testnet** çift borsa mimarisine sahip, Vercel üzerinde tek tıkla çalışabilen profesyonel al-sat terminali.
 
-First, run the development server:
+---
+
+## 🚀 Özellikler
+
+1. **Çift Borsa Sekmesi (Dual-Exchange Tabs):**
+   - 🏛️ **Nasdaq (Alpaca Paper Trading):** $100,000 sanal bakiye ile gerçekçi ABD hisse senedi işlemleri (AAPL, NVDA, TSLA, MSFT, QQQ, AMZN).
+   - 🪙 **Binance Spot Testnet:** Sanal kripto bakiyesi ile gerçek zamanlı BTC/USDT, ETH/USDT, SOL/USDT spot emirleri.
+
+2. **Gemini AI Karar Motoru:**
+   - Seçilen hisse/kriptonun fiyat hareketlerini, 24 saatlik trendini ve oynaklığını analiz eder.
+   - Yapılandırılmış JSON çıktısı ile net sinyal üretir: **BUY (Alım)**, **SELL (Satış)** veya **HOLD (Bekle)**.
+   - Türkçe gerekçelendirme, hedef fiyat (Target Price), zarar kes (Stop Loss) ve dinamik pozisyon büyüklüğü önerir.
+   - **Otomatik Alım (Auto-Pilot):** Yüksek güvenli sinyallerde otomatik olarak testnet emri iletme desteği.
+
+3. **Vercel Uyumlu (Serverless Architecture):**
+   - Vercel'in zaman aşımı kısıtlamalarına tam uyumlu Next.js App Router API Routes.
+   - `vercel.json` ile cron job zamanlayabilme imkanı.
+
+4. **Sıfır Yapılandırmayla Anında Çalışma:**
+   - Henüz API anahtarı eklememiş olsanız bile canlı testnet piyasa verileri ve sanal sandbox motoru sayesinde hemen test edilebilir.
+   - Anahtarları hem arayüzdeki **API Ayarları** modalından (LocalStorage) hem de Vercel ortam değişkenlerinden tanımlayabilirsiniz.
+
+---
+
+## 🛠️ Yerel Kurulum & Çalıştırma
 
 ```bash
+# Proje dizinine geçin
+cd C:/Users/safak/OneDrive/Belgeler/ai-trading-dashboard
+
+# Geliştirici sunucusunu başlatın
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Tarayıcınızda `http://localhost:3000` adresini açın.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+---
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 🔑 Gerekli API Anahtarları (Ücretsiz Alım)
 
-## Learn More
+### 1. Google Gemini API Key
+- [Google AI Studio](https://aistudio.google.com/) sayfasına gidin.
+- Google hesabınızla giriş yapıp **Get API Key** butonuna tıklayın.
 
-To learn more about Next.js, take a look at the following resources:
+### 2. Alpaca Paper Trading ($100k Sanal Nasdaq)
+- [app.alpaca.markets](https://app.alpaca.markets/) adresinden ücretsiz hesap açın.
+- Sol menüden **Paper Trading** moduna geçin.
+- Ana ekranda **API Keys** -> **Generate New Key** adımlarını izleyin (`APCA_API_KEY_ID` ve `APCA_API_SECRET_KEY`).
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### 3. Binance Spot Testnet (Sanal Kripto)
+- [testnet.binance.vision](https://testnet.binance.vision/) sayfasına gidin.
+- GitHub hesabınızla tek tıkla giriş yapın.
+- Ekranda size verilen **API Key** ve **Secret Key**'i alın.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+---
 
-## Deploy on Vercel
+## ☁️ Vercel'e Dağıtım (Deploy)
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+1. Projeyi GitHub'a push edin:
+   ```bash
+   git add .
+   git commit -m "feat: complete dual-exchange ai trading dashboard"
+   git branch -M main
+   # Kendi GitHub reponuzu bağlayın:
+   # git remote add origin https://github.com/KULLANICI_ADINIZ/ai-trading-dashboard.git
+   # git push -u origin main
+   ```
+2. [vercel.com](https://vercel.com) paneline gidip **New Project** diyerek GitHub reponuzu seçin.
+3. **Environment Variables** bölümüne şunları ekleyin:
+   - `GEMINI_API_KEY`
+   - `ALPACA_API_KEY`
+   - `ALPACA_API_SECRET`
+   - `BINANCE_API_KEY`
+   - `BINANCE_API_SECRET`
+4. **Deploy** butonuna basın. Projeniz Vercel üzerinde canlıya geçecektir!

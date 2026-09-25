@@ -1,0 +1,9 @@
+{
+  "framework": "nextjs",
+  "crons": [
+    {
+      "path": "/api/ai/analyze",
+      "schedule": "0 14 * * 1-5"
+    }
+  ]
+}
