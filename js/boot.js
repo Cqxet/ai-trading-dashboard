@@ -27,6 +27,7 @@
     App.market.init();
     App.backtest.init();
     App.paper.init();
+    App.bot.init();
     App.alerts.init();
     App.ai.init();
   } catch (e) { console.error(e); App.toast('Başlatma hatası: ' + e.message, 'bad', 15000); }

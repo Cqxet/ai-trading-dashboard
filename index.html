@@ -17,6 +17,7 @@
     <button data-v="market">Piyasa</button>
     <button data-v="bt">Backtest</button>
     <button data-v="paper">Sanal portföy</button>
+    <button data-v="bot">AI Bot</button>
     <button data-v="alerts">Alarmlar <span id="alertCount" class="mut"></span></button>
   </nav>
   <span class="sp"></span>
@@ -180,6 +181,32 @@
   </div>
 </section>
 
+<!-- ======================= AI BOT ======================= -->
+<section class="view" id="v-bot">
+  <div class="mk">
+    <section class="panel c12"><div class="ph"><h2>AI otomatik alım-satım botu (TL, sanal) — gerçek emir YOK</h2><span class="sp"></span>
+      <button class="btn sm buy" id="botToggle">Başlat</button> <button class="btn sm sell" id="botReset">Sıfırla (100 TL)</button></div>
+      <div class="cards" id="botCards"></div>
+      <div class="note" id="botNote"></div></section>
+    <section class="panel c4"><div class="ph"><h2>Maliyet ve strateji ayarları</h2></div>
+      <div class="form" style="grid-template-columns:1fr 1fr">
+        <label class="f">Komisyon % / işlem<input class="inp" id="botFee" type="number" step="0.001"></label>
+        <label class="f">Kayma % / işlem<input class="inp" id="botSlip" type="number" step="0.001"></label>
+        <label class="f">İşlem vergisi % / işlem<input class="inp" id="botTax" type="number" step="0.001"></label>
+        <label class="f">Kâr vergisi %<input class="inp" id="botPTax" type="number" step="0.1"></label>
+        <label class="f">Min. sinyal güveni<input class="inp" id="botConf" type="number" step="1"></label>
+        <label class="f">Maks. pozisyon<input class="inp" id="botMaxPos" type="number" step="1"></label>
+        <button class="btn pri" id="botApply">Ayarları uygula</button>
+      </div>
+      <div class="note">Oranlar tahminidir; kendi borsanıza ve güncel vergi mevzuatına göre değiştirin. Ayar değişikliği yalnızca yeni işlemleri etkiler.</div>
+    </section>
+    <section class="panel c8"><div class="ph"><h2>Portföy değeri (TL)</h2></div><div class="eqchart" id="botChart"></div></section>
+    <section class="panel c12"><div class="ph"><h2>Açık pozisyonlar</h2></div><div class="scroll" id="botPos"></div></section>
+    <section class="panel c6"><div class="ph"><h2>Karar günlüğü</h2></div><div class="scroll" id="botLog"></div></section>
+    <section class="panel c6"><div class="ph"><h2>İşlem geçmişi</h2></div><div class="scroll" id="botHist"></div></section>
+  </div>
+</section>
+
 <!-- ======================= ALARMLAR ======================= -->
 <section class="view" id="v-alerts">
   <div class="mk">
@@ -229,6 +256,7 @@
 <script src="js/signals.js"></script>
 <script src="js/backtest.js"></script>
 <script src="js/paper.js"></script>
+<script src="js/bot.js"></script>
 <script src="js/util.js"></script>
 <script src="js/data.js"></script>
 <script src="js/charts.js"></script>
@@ -237,6 +265,7 @@
 <script src="js/app-market.js"></script>
 <script src="js/app-backtest.js"></script>
 <script src="js/app-paper.js"></script>
+<script src="js/app-bot.js"></script>
 <script src="js/app-alerts.js"></script>
 <script src="js/app-ai.js"></script>
 <script src="js/boot.js"></script>
