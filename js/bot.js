@@ -28,8 +28,21 @@
     cooldownMin: 60,       // aynı sembolde çıkış sonrası bekleme
     maxHoldH: 48,          // azami tutma süresi
     maxTradesPerHour: 6,
-    sigMaxAgeMin: 15       // sinyal verisi azami yaşı
+    sigMaxAgeMin: 15,      // sinyal verisi azami yaşı
+    mode: 'normal'
   };
+
+  // Hız kademeleri: her seviyede sinyal zaman dilimi küçülür, tarama sıklaşır, eşikler gevşer,
+  // tutma süresi kısalır. Maliyet filtresi (minNetGain: gidiş-dönüş maliyet sonrası beklenen kazanç) HER kademede korunur.
+  // tf/scanSec/topN/buyTh/atrStop/atrTarget tarama ayarlarıdır (app-bot.js okur).
+  var PRESETS = {
+    normal:   { mode: 'normal',   minConf: 55, minRR: 1.5, minNetGain: 0.01,   maxPos: 3, cooldownMin: 60, maxHoldH: 48,   maxTradesPerHour: 6,   sigMaxAgeMin: 15 },
+    fast:     { mode: 'fast',     minConf: 35, minRR: 1.2, minNetGain: 0.004,  maxPos: 4, cooldownMin: 10, maxHoldH: 3,    maxTradesPerHour: 24,  sigMaxAgeMin: 3,   tf: '15m', scanSec: 30, topN: 20, buyTh: 20, atrStop: 1.2, atrTarget: 2.0 },
+    veryfast: { mode: 'veryfast', minConf: 30, minRR: 1.1, minNetGain: 0.003,  maxPos: 5, cooldownMin: 5,  maxHoldH: 1.5,  maxTradesPerHour: 40,  sigMaxAgeMin: 2,   tf: '5m',  scanSec: 20, topN: 25, buyTh: 15, atrStop: 1.0, atrTarget: 1.6 },
+    extreme:  { mode: 'extreme',  minConf: 25, minRR: 1.0, minNetGain: 0.002,  maxPos: 6, cooldownMin: 2,  maxHoldH: 0.75, maxTradesPerHour: 80,  sigMaxAgeMin: 1.5, tf: '3m',  scanSec: 12, topN: 30, buyTh: 10, atrStop: 0.9, atrTarget: 1.3 },
+    super:    { mode: 'super',    minConf: 20, minRR: 1.0, minNetGain: 0.0015, maxPos: 8, cooldownMin: 1,  maxHoldH: 0.33, maxTradesPerHour: 150, sigMaxAgeMin: 1,   tf: '1m',  scanSec: 8,  topN: 30, buyTh: 8,  atrStop: 0.8, atrTarget: 1.1 }
+  };
+  function applyMode(st, mode) { Object.assign(st.s, PRESETS[mode] || PRESETS.normal); }
 
   function create(opts) {
     var s = Object.assign({}, DEFAULTS, opts || {});
@@ -139,5 +152,5 @@
     return ev;
   }
 
-  return { DEFAULTS: DEFAULTS, create: create, costRate: costRate, buy: buy, sell: sell, step: step, equity: equity, logEquity: logEquity };
+  return { DEFAULTS: DEFAULTS, PRESETS: PRESETS, applyMode: applyMode, create: create, costRate: costRate, buy: buy, sell: sell, step: step, equity: equity, logEquity: logEquity };
 });

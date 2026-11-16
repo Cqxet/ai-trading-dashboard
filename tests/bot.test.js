@@ -64,3 +64,14 @@ test('equity: nakit + pozisyon değeri', () => {
   const st = Bot.create(); Bot.step(st, ctx(100, sig()), T0);
   const e = Bot.equity(st, { AAA: 100 }, 40); assert.ok(e < 100 && e > 99);
 });
+test('hız kademeleri: her seviye bir öncekinden hızlı ve maliyet filtresi korunur', () => {
+  const order = ['normal', 'fast', 'veryfast', 'extreme', 'super'], P = Bot.PRESETS;
+  for (let i = 1; i < order.length; i++) {
+    const a = P[order[i - 1]], b = P[order[i]];
+    assert.ok(b.cooldownMin < a.cooldownMin && b.maxHoldH < a.maxHoldH && b.maxTradesPerHour > a.maxTradesPerHour && b.maxPos >= a.maxPos, order[i]);
+    assert.ok(b.minConf < a.minConf && b.minNetGain < a.minNetGain, order[i]);
+    if (i > 1) assert.ok(b.scanSec < a.scanSec);
+  }
+  order.forEach((m) => assert.ok(P[m].minNetGain > 0, m + ' maliyet filtresi açık kalmalı'));
+  const st = Bot.create(); Bot.applyMode(st, 'super'); assert.equal(st.s.mode, 'super'); assert.equal(st.s.tf, '1m');
+});

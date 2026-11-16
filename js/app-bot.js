@@ -13,6 +13,7 @@
     st = App.store('bot');
     if (!st || typeof st.cash !== 'number' || !st.s) st = Bot.create();
     st.s = Object.assign({}, Bot.DEFAULTS, st.s);
+    if (st.s.mode === 'scalp') Bot.applyMode(st, 'fast');   // eski kayıtlı mod adı
   }
   function save() { App.store('bot', st); }
   function prices() { var p = {}; App.SYMBOLS.forEach(function (s) { if (App.tick[s]) p[s] = App.tick[s].price; }); return p; }
@@ -28,12 +29,29 @@
   }
   function fxOk() { return fx > 0 && Date.now() - fxAt < 120000; }
 
+  // Hızlı mod: en hacimli 20 sembolde 15 dk mumlardan düşük eşikli sinyal (30 sn'de bir)
+  var scalpSigs = {}, scalping = false, lastScalp = 0;
+  async function scalpScan() {
+    if (scalping || !st.enabled || st.s.mode === 'normal') return;
+    scalping = true; lastScalp = Date.now();
+    var S = st.s, top = App.SYMBOLS.filter(function (s) { return App.tick[s]; }).sort(function (a, b) { return App.tick[b].qvol - App.tick[a].qvol; }).slice(0, S.topN || 20);
+    await Promise.all(top.map(async function (s) {
+      try {
+        var cs = (await root.Data.klines(s, S.tf || '15m', 200, (S.scanSec || 30) * 800)).slice(0, -1);
+        var g = root.Signals.analyze(cs, { buyTh: S.buyTh, sellTh: -S.buyTh, atrStop: S.atrStop, atrTarget: S.atrTarget });
+        if (g) scalpSigs[s] = { g: g, t: Date.now() };
+      } catch (e) { /* sonraki turda */ }
+    }));
+    scalping = false;
+  }
+
   function run() {
     var now = Date.now();
     if (!st.enabled || !fxOk() || now - lastStep < 3000) return;
     lastStep = now;
     var P = prices(), sigs = {};
-    App.SYMBOLS.forEach(function (s) { if (App.sig[s]) sigs[s] = { g: App.sig[s].g, t: App.sig[s].t }; });
+    if (st.s.mode !== 'normal') { sigs = scalpSigs; if (now - lastScalp > (st.s.scanSec || 30) * 1000) scalpScan(); }
+    else App.SYMBOLS.forEach(function (s) { if (App.sig[s]) sigs[s] = { g: App.sig[s].g, t: App.sig[s].t }; });
     var ev = Bot.step(st, { prices: P, fx: fx, sigs: sigs }, now);
     Bot.logEquity(st, P, fx, now, 30);
     ev.forEach(function (e) {
@@ -57,7 +75,7 @@
     $('botToggle').textContent = st.enabled ? 'Durdur' : 'Başlat';
     $('botToggle').className = 'btn sm ' + (st.enabled ? 'sell' : 'buy');
     $('botNote').innerHTML = (st.enabled ? '● Bot çalışıyor' : '○ Bot durdu') + ' — yalnızca bu sayfa açıkken işlem yapar. Her işlemde komisyon + kayma + işlem vergisi düşülür; ' +
-      'sinyaller izleme listesi taramasından (' + esc(App.S.scanTf) + ') gelir. Gerçek para/emir yok. Yatırım tavsiyesi değildir; geçmiş performans geleceği garanti etmez.';
+      (st.s.mode !== 'normal' ? 'Hız modu (' + esc(st.s.mode) + '): en hacimli ' + st.s.topN + ' sembolde ' + st.s.tf + ' sinyaller, ' + st.s.scanSec + ' saniyede bir taranır; ' : 'sinyaller izleme listesi taramasından (' + esc(App.S.scanTf) + ') gelir; ') + 'Maliyetleri (yaklaşık %' + (Bot.costRate(st.s) * 200).toFixed(2) + ' gidiş-dönüş) aşamayan fırsatlar atlanır. Gerçek para/emir yok. Yatırım tavsiyesi değildir; geçmiş performans geleceği garanti etmez.';
     $('botPos').innerHTML = '<table class="t"><thead><tr><th>Sembol</th><th>Miktar</th><th>Giriş $</th><th>Güncel $</th><th>Maliyet ₺</th><th>Değer ₺</th><th>PnL ₺</th><th>Stop</th><th>Hedef</th><th>Açılış</th><th>Gerekçe</th><th></th></tr></thead><tbody>' +
       (st.positions.map(function (p) {
         var px = P[p.sym] || p.entry, v = p.qty * px * (fx || p.entryFx), u = v - p.costTRY;
@@ -90,7 +108,7 @@
     var s = st.s;
     $('botFee').value = +(s.feeRate * 100).toFixed(4); $('botSlip').value = +(s.slipRate * 100).toFixed(4);
     $('botTax').value = +(s.taxRate * 100).toFixed(4); $('botPTax').value = +(s.profitTaxRate * 100).toFixed(2);
-    $('botConf').value = s.minConf; $('botMaxPos').value = s.maxPos;
+    $('botMode').value = s.mode || 'normal'; $('botConf').value = s.minConf; $('botMaxPos').value = s.maxPos;
   }
 
   App.bot = {
@@ -108,6 +126,7 @@
         var s = st.s, v = function (id) { return +$(id).value; };
         var fee = v('botFee') / 100, slip = v('botSlip') / 100, tax = v('botTax') / 100, ptax = v('botPTax') / 100, conf = v('botConf'), mp = Math.round(v('botMaxPos'));
         if (![fee, slip, tax, ptax].every(function (x) { return x >= 0 && x < 0.5; }) || !(conf >= 0 && conf <= 100) || !(mp >= 1 && mp <= 10)) { App.toast('Geçersiz ayar değeri', 'bad'); return; }
+        var mode = $('botMode').value; if (mode !== s.mode) { Bot.applyMode(st, mode); conf = s.minConf; mp = s.maxPos; $('botConf').value = conf; $('botMaxPos').value = mp; }
         s.feeRate = fee; s.slipRate = slip; s.taxRate = tax; s.profitTaxRate = ptax; s.minConf = conf; s.maxPos = mp;
         save(); App.toast('Ayarlar uygulandı', 'ok');
       };
