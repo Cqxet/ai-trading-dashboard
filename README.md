@@ -1,79 +1,100 @@
-# 📈 QuantGemini AI Trading Terminal (Nasdaq & Binance Testnet)
+# AI Trading Board
 
-Google Gemini AI destekli, **Nasdaq (Alpaca Paper Trading)** ve **Binance Spot Testnet** çift borsa mimarisine sahip, Vercel üzerinde tek tıkla çalışabilen profesyonel al-sat terminali.
+Türkçe arayüzlü, gerçek canlı kripto verisi kullanan teknik analiz panosu. Kurulum gerektirmez; tarayıcıda çift tıklayarak açılır.
 
----
+> ⚠ **Yatırım tavsiyesi değildir.** Sinyaller kural tabanlı teknik analizdir; backtest sonuçları geleceği garanti etmez. Pano **hiçbir zaman gerçek emir göndermez**; "Sanal portföy" tamamen tarayıcınızda tutulan bir simülasyondur.
 
-## 🚀 Özellikler
+## Nasıl açılır
 
-1. **Çift Borsa Sekmesi (Dual-Exchange Tabs):**
-   - 🏛️ **Nasdaq (Alpaca Paper Trading):** $100,000 sanal bakiye ile gerçekçi ABD hisse senedi işlemleri (AAPL, NVDA, TSLA, MSFT, QQQ, AMZN).
-   - 🪙 **Binance Spot Testnet:** Sanal kripto bakiyesi ile gerçek zamanlı BTC/USDT, ETH/USDT, SOL/USDT spot emirleri.
+1. `ai-trading-board` klasöründeki **`index.html`** dosyasına çift tıklayın (Chrome, Edge, Firefox veya Safari'nin güncel sürümü).
+2. İnternet bağlantısı gerekir (canlı veri ve grafik kütüphanesi için).
 
-2. **Gemini AI Karar Motoru:**
-   - Seçilen hisse/kriptonun fiyat hareketlerini, 24 saatlik trendini ve oynaklığını analiz eder.
-   - Yapılandırılmış JSON çıktısı ile net sinyal üretir: **BUY (Alım)**, **SELL (Satış)** veya **HOLD (Bekle)**.
-   - Türkçe gerekçelendirme, hedef fiyat (Target Price), zarar kes (Stop Loss) ve dinamik pozisyon büyüklüğü önerir.
-   - **Otomatik Alım (Auto-Pilot):** Yüksek güvenli sinyallerde otomatik olarak testnet emri iletme desteği.
+Hiçbir paket kurulumu, sunucu veya API anahtarı gerekmez. Dosyalar klasik `<script>` etiketleriyle yüklenir (ES module kullanılmadı, çünkü `file://` altında engellenir).
 
-3. **Vercel Uyumlu (Serverless Architecture):**
-   - Vercel'in zaman aşımı kısıtlamalarına tam uyumlu Next.js App Router API Routes.
-   - `vercel.json` ile cron job zamanlayabilme imkanı.
+Derin bağlantılar: `index.html#market`, `#bt`, `#paper`, `#alerts`, `#grid`; `#bt:run` backtest'i varsayılanlarla hemen çalıştırır.
 
-4. **Sıfır Yapılandırmayla Anında Çalışma:**
-   - Henüz API anahtarı eklememiş olsanız bile canlı testnet piyasa verileri ve sanal sandbox motoru sayesinde hemen test edilebilir.
-   - Anahtarları hem arayüzdeki **API Ayarları** modalından (LocalStorage) hem de Vercel ortam değişkenlerinden tanımlayabilirsiniz.
+## Özellikler
 
----
+| Bölüm | İçerik |
+|---|---|
+| **Pano** | Sürükle-bırak ile yer değiştiren, genişliği (⇔) ve yüksekliği (alt kenar) ayarlanabilen, gizlenebilen/daraltılabilen paneller; düzen localStorage'da saklanır. Koyu/açık tema (◐). |
+| **İzleme listesi** | 40 USDT çifti, arama, ★ favoriler (üstte), fiyat / 24s % / hacim / AI skoruna göre sıralama, son 30 mumun mini grafiği, canlı fiyat yanıp sönmesi. |
+| **Grafik** | Mum / Heikin-Ashi / çizgi; 1m–1d; EMA20/50/200, SMA20, Bollinger, VWAP (günlük), Supertrend, hacim, destek/direnç + AI stop/hedef çizgileri, formasyon işaretleri; alt paneller RSI, MACD, Stokastik, ATR, OBV (zaman ekseni senkron). Çizim: yatay çizgi ve trend çizgisi (sembol bazında kalıcı). |
+| **Çoklu grafik** | 2×2 görünüm, her hücrede sembol + zaman dilimi seçimi, canlı. |
+| **AI sinyal motoru v2** | Ağırlıklı 8 bileşen (EMA trendi, Supertrend, MACD, RSI, Stokastik, Bollinger %B, hacim/OBV, mum formasyonları), rejime göre ağırlık uyarlama (trend / yatay / yüksek volatilite, ADX + ATR yüzdeliği), güven skoru (bileşen uyumu + skor büyüklüğü), fraktal pivotlardan kümelenmiş destek/direnç, formasyon tespiti (yutan boğa/ayı, çekiç, ters çekiç, asılı adam, kayan yıldız, doji, sabah/akşam yıldızı, üç beyaz asker/üç kara karga), her bileşen için Türkçe gerekçe, ATR tabanlı stop/hedef ve risk/ödül. Sinyal son **kapanmış** mumdan hesaplanır. |
+| **Çoklu zaman dilimi** | 15m / 1h / 4h / 1d analizleri ve ağırlıklı birleşik skor (%15/%25/%30/%30) + uyum sayısı. |
+| **AI Analist** | Varsayılan: kural tabanlı Türkçe yorum. Ayarlar'dan (⚙) Anthropic API anahtarı girilirse "Claude ile analiz et" düğmesi görünür ve güncel gösterge özeti `claude-sonnet-5-5` modeline gönderilip Türkçe yorum alınır. |
+| **Backtest** | 1000–5000 mum (Binance sayfalama), eşikler / stop-hedef çarpanları / komisyon / kayma / short / ters sinyalde çıkış ayarları; equity eğrisi + al-tut karşılaştırması, toplam getiri, kazanma oranı, kâr faktörü, maks. düşüş, Sharpe, işlem listesi. |
+| **Sanal portföy** | 10.000 USDT ile başlar; piyasa/limit emir, long/short, stop-loss/kâr al, canlı PnL, bekleyen emirler, işlem geçmişi, portföy değeri grafiği, sıfırlama. localStorage'da kalıcı. %0,1 komisyon. |
+| **Piyasa** | Isı haritası (renk = 24s %, alan ∝ √hacim), en çok yükselen/düşen, hacim patlaması taraması, RSI aşırı alım/satım tarayıcısı (seçilebilir zaman dilimi), Fear & Greed (30 günlük geçmiş), CoinGecko global (BTC/ETH dominansı, toplam piyasa değeri), 12×12 korelasyon matrisi. |
+| **Alarmlar** | Fiyat üstü/altı (canlı), RSI ≥/≤ ve AI sinyal değişimi (60 sn'de bir); sayfa içi bildirim + sesli uyarı + (izin verilirse) tarayıcı bildirimi; alarm geçmişi; kalıcı. |
+| **Risk hesaplayıcı** | Bakiye, risk %, giriş, stop (+ ops. hedef) → pozisyon miktarı, değeri, efektif kaldıraç, R:R. "AI seviyelerini al" ile otomatik doldurma. |
+| **Sağlamlık** | REST yedeği (data-api.binance.vision → api.binance.com), istek kuyruğu (en fazla 4 eşzamanlı), yerel ağırlık sayacı ve yumuşak limit (4000/6000), 429/418'de Retry-After kadar bekleme, WebSocket üstel geri çekilmeli yeniden bağlanma + uç nokta rotasyonu + 30 sn sessizlik bekçisi, WS kapalıyken REST ile ticker yoklama, bağlantı durum göstergesi (üst sağ), yükleniyor/hata durumları, mobil tek sütun düzen. |
 
-## 🛠️ Yerel Kurulum & Çalıştırma
+## Veri kaynakları (hepsi anahtarsız, CORS `*` doğrulandı)
 
-```bash
-# Proje dizinine geçin
-cd C:/Users/safak/OneDrive/Belgeler/ai-trading-dashboard
+- Binance spot: `https://data-api.binance.vision` (yedek `https://api.binance.com`), WebSocket `wss://data-stream.binance.vision` (yedek `wss://stream.binance.com:9443`)
+- Fear & Greed: `https://api.alternative.me/fng/`
+- Global piyasa: `https://api.coingecko.com/api/v3/global` (ücretsiz katman dakikalık limit uygulayabilir; panel 5 dk'da bir yeniler)
+- Grafik kütüphanesi: `lightweight-charts@4.1.3` (jsDelivr, sabit sürüm)
 
-# Geliştirici sunucusunu başlatın
-npm run dev
+## AI Analist ve API anahtarı
+
+- Anahtar yalnızca bu tarayıcının `localStorage`'ında (`atb.anthropicKey`) tutulur ve **yalnızca** "Claude ile analiz et"e bastığınızda doğrudan `https://api.anthropic.com/v1/messages` adresine `x-api-key` başlığıyla gönderilir. Başka hiçbir yere gönderilmez; otomatik/arka plan çağrısı yoktur.
+- Tarayıcıdan doğrudan çağrı için `anthropic-dangerous-direct-browser-access: true` başlığı kullanılır. Bu, anahtarın sayfa içinde erişilebilir olması demektir: **paylaşılan bilgisayarda kullanmayın**, mümkünse harcama limiti olan ayrı bir anahtar kullanın.
+- İstek: model `claude-sonnet-5-5`, `output_config.effort: "low"`, sunucu tarafı yedek model (`fallbacks: "default"`, beta `server-side-fallback-2026-07-01`; reddedilirse yedeksiz tekrar denenir). `stop_reason: "refusal"` ve hata kodları (401/429/529) anlaşılır mesajla gösterilir.
+- Her analiz API hesabınızdan ücretlendirilir. LLM çıktısı hatalı olabilir.
+
+## Mimari
+
+```
+ai-trading-board/
+├── index.html            # Yerleşim + klasik script sırası
+├── css/style.css         # Token tabanlı tema (koyu/açık), ızgara, mobil
+├── js/
+│   ├── indicators.js     # SAF: SMA, EMA, RMA, RSI, MACD, Stokastik, TR/ATR, Bollinger, Supertrend, ADX, OBV, VWAP, Heikin-Ashi, Pearson
+│   ├── signals.js        # SAF: sinyal motoru v2 (computeIndicators, scoreAt, analyze, formasyon, D/D, rejim, MTF, kural yorumu)
+│   ├── backtest.js       # SAF: backtest motoru + Binance sayfalama (fetchHistory)
+│   ├── paper.js          # SAF: sanal portföy durum geçişleri (ağ yok)
+│   ├── util.js           # SAF: biçimlendirme, squarified treemap, risk hesabı, alarm değerlendirme
+│   ├── data.js           # Ağ: REST kuyruğu/yedek/rate-limit, WebSocket yöneticisi
+│   ├── charts.js         # lightweight-charts sarmalayıcısı (ChartView): göstergeler, alt paneller, çizimler
+│   ├── app.js            # Çekirdek: durum, localStorage, olay yolu, tema, ticker akışı, liste taraması
+│   ├── app-dashboard.js  # Pano: panel düzeni, liste, ana grafik, sinyal, MTF, defter, risk, 2×2
+│   ├── app-market.js     # Piyasa sekmesi
+│   ├── app-backtest.js   # Backtest sekmesi
+│   ├── app-paper.js      # Sanal portföy sekmesi
+│   ├── app-alerts.js     # Alarmlar
+│   ├── app-ai.js         # AI Analist + Ayarlar
+│   └── boot.js           # Başlatma
+└── tests/
+    ├── indicators.test.js  # Gösterge birim testleri (bilinen değerler)
+    ├── engine.test.js      # Sinyal, backtest (lookahead), paper, util testleri
+    ├── live-check.js       # Canlı uç nokta + gerçek veride motor kontrolü
+    ├── e2e-chrome.js       # Headless Chrome (DevTools Protocol) uçtan uca duman testi
+    └── e2e-out/            # Son E2E çalıştırmasının ekran görüntüleri
 ```
 
-Tarayıcınızda `http://localhost:3000` adresini açın.
+Saf modüller UMD kalıbındadır: tarayıcıda `window.TA / Signals / Backtest / Paper / Util`, Node'da `require()` ile yüklenir; bu sayede aynı kod hem panoda hem testlerde çalışır.
 
----
+**Lookahead önlemi:** tüm göstergeler nedenseldir (i. değer yalnızca 0..i verisini kullanır — testle doğrulanır). Backtest, sinyali i. mumun kapanışında hesaplar ve işlemi i+1. mumun açılışında yapar; stop/hedef sonraki mumların yüksek/düşüğüyle kontrol edilir, aynı mumda ikisi de değerse önce stop varsayılır; açılış stop'un ötesine gap yaparsa çıkış açılış fiyatındandır. Pano ve tarayıcılar da sinyali son **kapanmış** mumdan hesaplar.
 
-## 🔑 Gerekli API Anahtarları (Ücretsiz Alım)
+## Testler (Node 18+; ek paket gerekmez)
 
-### 1. Google Gemini API Key
-- [Google AI Studio](https://aistudio.google.com/) sayfasına gidin.
-- Google hesabınızla giriş yapıp **Get API Key** butonuna tıklayın.
+```bash
+cd ai-trading-board
+node --test tests/indicators.test.js tests/engine.test.js   # 40 birim testi
+node tests/live-check.js                                     # canlı API + gerçek veride backtest (internet)
+node tests/e2e-chrome.js                                     # headless Chrome ile uçtan uca (Chrome/Edge kurulu olmalı)
+```
 
-### 2. Alpaca Paper Trading ($100k Sanal Nasdaq)
-- [app.alpaca.markets](https://app.alpaca.markets/) adresinden ücretsiz hesap açın.
-- Sol menüden **Paper Trading** moduna geçin.
-- Ana ekranda **API Keys** -> **Generate New Key** adımlarını izleyin (`APCA_API_KEY_ID` ve `APCA_API_SECRET_KEY`).
+## Sınırlamalar
 
-### 3. Binance Spot Testnet (Sanal Kripto)
-- [testnet.binance.vision](https://testnet.binance.vision/) sayfasına gidin.
-- GitHub hesabınızla tek tıkla giriş yapın.
-- Ekranda size verilen **API Key** ve **Secret Key**'i alın.
-
----
-
-## ☁️ Vercel'e Dağıtım (Deploy)
-
-1. Projeyi GitHub'a push edin:
-   ```bash
-   git add .
-   git commit -m "feat: complete dual-exchange ai trading dashboard"
-   git branch -M main
-   # Kendi GitHub reponuzu bağlayın:
-   # git remote add origin https://github.com/KULLANICI_ADINIZ/ai-trading-dashboard.git
-   # git push -u origin main
-   ```
-2. [vercel.com](https://vercel.com) paneline gidip **New Project** diyerek GitHub reponuzu seçin.
-3. **Environment Variables** bölümüne şunları ekleyin:
-   - `GEMINI_API_KEY`
-   - `ALPACA_API_KEY`
-   - `ALPACA_API_SECRET`
-   - `BINANCE_API_KEY`
-   - `BINANCE_API_SECRET`
-4. **Deploy** butonuna basın. Projeniz Vercel üzerinde canlıya geçecektir!
+- Sinyaller basit kural tabanlı teknik analizdir; "AI" adı skor motorunu ifade eder, makine öğrenmesi modeli değildir. Gerçek veride yapılan örnek backtestlerde strateji bazı dönemlerde al-tut'un altında kalmıştır.
+- Backtest: tek pozisyon, sermayenin tamamı, sabit komisyon/kayma; fonlama, likidite, emir defteri derinliği ve kısmi dolum modellenmez. Mum içi sıra bilinmediği için stop/hedef çakışmasında muhafazakâr varsayım yapılır.
+- Sanal portföy limit emirleri yalnızca ~1 sn'lik ticker fiyatlarıyla kontrol edilir (mum içi fitiller kaçabilir); short pozisyonlar teminat = nominal değer ile basitleştirilmiştir; kaldıraç/tasfiye yoktur.
+- Alarmlar ve canlı akış yalnızca sayfa açıkken çalışır. Bazı tarayıcılar `file://` sayfalarına bildirim izni vermez; bu durumda sayfa içi uyarı + ses kullanılır. Ses, sayfayla ilk etkileşimden sonra çalabilir (tarayıcı otomatik oynatma kuralı).
+- Binance ağırlık başlıkları CORS ile açılmadığından tarayıcıda okunamaz; ağırlık yerelde tahmin edilir. Binance'in erişilemediği bölgelerde (ör. bazı ülkeler/ağlar) veri gelmeyebilir.
+- CoinGecko ücretsiz API'si zaman zaman 429 döndürebilir; panel bunu gösterir ve sonra tekrar dener.
+- Tüm durum `localStorage`'dadır: gizli pencerede veya tarayıcı verisi silinince kaybolur; farklı tarayıcılar arasında paylaşılmaz.
+- Grafik kütüphanesi CDN'den yüklenir; çevrimdışı açılmaz.

@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Trading Board</title>
+<link rel="stylesheet" href="css/style.css">
+<!-- Tek dış bağımlılık: TradingView lightweight-charts (sabit sürüm) -->
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+<header class="top">
+  <h1>AI <i>Trading</i> Board</h1>
+  <nav class="tabs" id="tabs">
+    <button data-v="dash" class="on">Pano</button>
+    <button data-v="grid">Çoklu grafik</button>
+    <button data-v="market">Piyasa</button>
+    <button data-v="bt">Backtest</button>
+    <button data-v="paper">Sanal portföy</button>
+    <button data-v="alerts">Alarmlar <span id="alertCount" class="mut"></span></button>
+  </nav>
+  <span class="sp"></span>
+  <div class="conn" id="conn" title="Bağlantı durumu">
+    <span><span class="dot" id="dRest"></span><span class="lbl">REST</span> <span id="tRest" class="mut"></span></span>
+    <span><span class="dot" id="dWs"></span><span class="lbl">Canlı</span></span>
+    <span class="lbl" id="tWeight" title="Son 1 dakikadaki tahmini Binance istek ağırlığı (limit 6000)"></span>
+  </div>
+  <button class="icon" id="btnTheme" title="Koyu / açık tema">◐</button>
+  <button class="icon" id="btnSettings" title="Ayarlar">⚙</button>
+</header>
+<div class="disclaimer">⚠ Bu pano eğitim ve analiz amaçlıdır; <b>yatırım tavsiyesi değildir</b>. Sinyaller kural tabanlıdır, backtest sonuçları geleceği garanti etmez. Gerçek emir gönderilmez — portföy tamamen sanaldır.</div>
+
+<main>
+<!-- ======================= PANO ======================= -->
+<section class="view on" id="v-dash">
+  <div class="dash-tools">
+    <span class="mut">Paneller başlığından sürüklenip yer değiştirebilir; ⇔ genişlik, alt kenar yükseklik ayarlar. Düzen otomatik kaydedilir.</span>
+    <span class="sp"></span>
+    <div class="dd" id="ddPanels"><button class="btn sm" data-dd>Gizli paneller ▾</button><div class="menu" id="hiddenPanels"></div></div>
+    <button class="btn sm" id="btnResetLayout">Düzeni sıfırla</button>
+  </div>
+  <div class="dash" id="dash">
+    <section class="panel" data-id="watch" data-title="İzleme listesi · canlı">
+      <div class="pb" style="height:560px">
+        <div class="tools">
+          <input class="inp" id="wSearch" placeholder="Ara (ör. sol)" style="flex:1;min-width:90px">
+          <label class="chk"><input type="checkbox" id="wFav"> ★ Favoriler</label>
+        </div>
+        <table class="t" id="wTable"><thead><tr>
+          <th class="s" data-k="sym">Sembol</th><th class="s" data-k="price">Fiyat</th><th class="s" data-k="chg">24s %</th>
+          <th class="s" data-k="qvol">Hacim</th><th class="s" data-k="score">Sinyal</th><th>Trend</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+    </section>
+    <section class="panel" data-id="chart" data-title="Grafik">
+      <div class="pb" style="height:640px;overflow:hidden;display:flex;flex-direction:column">
+        <div class="ctool">
+          <span class="sym" id="cSym">BTC/USDT</span><span class="px num" id="cPx">–</span><span id="cChg" class="num"></span>
+          <span class="sp"></span>
+          <div class="seg" id="cTf"></div>
+          <div class="seg" id="cType"><button data-t="candle">Mum</button><button data-t="ha">H-Ashi</button><button data-t="line">Çizgi</button></div>
+          <div class="dd" id="ddInd"><button class="btn sm" data-dd>Göstergeler ▾</button><div class="menu" id="indMenu"></div></div>
+          <button class="btn sm" id="drH" title="Yatay çizgi">─ Yatay</button>
+          <button class="btn sm" id="drT" title="Trend çizgisi">╱ Trend</button>
+          <button class="btn sm" id="drC" title="Bu sembolün çizimlerini sil">✕ Çizimler</button>
+        </div>
+        <div id="mainChart" style="flex:1;min-height:0"></div>
+      </div>
+    </section>
+    <section class="panel" data-id="signal" data-title="AI sinyal motoru v2">
+      <div class="pb" style="height:640px" id="sigBody"><div class="loading">Hesaplanıyor…</div></div>
+    </section>
+    <section class="panel" data-id="mtf" data-title="Çoklu zaman dilimi uyumu">
+      <div class="pb" style="height:300px" id="mtfBody"><div class="loading">Yükleniyor…</div></div>
+    </section>
+    <section class="panel" data-id="analyst" data-title="AI Analist">
+      <div class="pb" style="height:300px">
+        <div class="tools">
+          <span class="mut" id="anMode">Kural tabanlı yorum</span><span class="sp"></span>
+          <button class="btn sm pri hidden" id="anRun">Claude ile analiz et</button>
+        </div>
+        <div class="ai-out" id="anOut">Yükleniyor…</div>
+      </div>
+    </section>
+    <section class="panel" data-id="risk" data-title="Risk hesaplayıcı">
+      <div class="pb" style="height:300px">
+        <div class="form">
+          <label class="f">Bakiye (USDT)<input class="inp" id="rkBal" type="number" value="10000"></label>
+          <label class="f">Risk %<input class="inp" id="rkPct" type="number" value="1" step="0.1"></label>
+          <label class="f">Giriş<input class="inp" id="rkEntry" type="number" step="any"></label>
+          <label class="f">Stop<input class="inp" id="rkStop" type="number" step="any"></label>
+          <label class="f">Hedef (ops.)<input class="inp" id="rkTgt" type="number" step="any"></label>
+          <button class="btn" id="rkFill" title="Seçili sembolün AI sinyal seviyelerini doldur">AI seviyelerini al</button>
+        </div>
+        <div id="rkOut" class="cards"></div>
+      </div>
+    </section>
+    <section class="panel" data-id="book" data-title="Emir defteri">
+      <div class="pb ob" style="height:320px" id="book"><div class="loading">Bağlanıyor…</div></div>
+    </section>
+    <section class="panel" data-id="trades" data-title="Son işlemler">
+      <div class="pb ob" style="height:320px" id="trades"><div class="loading">Bağlanıyor…</div></div>
+    </section>
+    <section class="panel" data-id="stats" data-title="24s özet · seçili sembol">
+      <div class="pb" style="height:320px" id="stats"></div>
+    </section>
+  </div>
+</section>
+
+<!-- ======================= ÇOKLU GRAFİK ======================= -->
+<section class="view" id="v-grid">
+  <div class="dash-tools"><span class="mut">2×2 görünüm: her hücrede sembol ve zaman dilimi seçilebilir (canlı, EMA20/50 + hacim).</span></div>
+  <div class="grid4" id="grid4"></div>
+</section>
+
+<!-- ======================= PİYASA ======================= -->
+<section class="view" id="v-market">
+  <div class="mk">
+    <section class="panel c8"><div class="ph"><h2>Isı haritası · renk = 24s değişim, kutu alanı ∝ √(24s hacim)</h2></div><div class="heat" id="heat"></div></section>
+    <section class="panel c4"><div class="ph"><h2>Duyarlılık & piyasa</h2></div>
+      <div id="fng" class="gauge"><div class="loading">Fear & Greed yükleniyor…</div></div>
+      <div id="glob" class="cards"></div>
+    </section>
+    <section class="panel c3"><div class="ph"><h2>En çok yükselenler</h2></div><div id="gainers"></div></section>
+    <section class="panel c3"><div class="ph"><h2>En çok düşenler</h2></div><div id="losers"></div></section>
+    <section class="panel c3"><div class="ph"><h2>Hacim patlaması</h2><span class="sp"></span><span class="mut" id="volTf"></span></div><div id="volSpike"></div></section>
+    <section class="panel c3"><div class="ph"><h2>RSI tarayıcı</h2><span class="sp"></span>
+      <select class="inp" id="scanTf" style="padding:1px 4px;font-size:11px"><option>15m</option><option selected>1h</option><option>4h</option><option>1d</option></select></div>
+      <div id="rsiScan"><div class="loading">Taranıyor…</div></div></section>
+    <section class="panel c12"><div class="ph"><h2>Korelasyon matrisi · hacme göre ilk 12 · log getiriler</h2><span class="sp"></span><span class="mut" id="corrInfo"></span></div>
+      <div style="overflow:auto" id="corr"><div class="loading">Hesaplanıyor…</div></div></section>
+  </div>
+</section>
+
+<!-- ======================= BACKTEST ======================= -->
+<section class="view" id="v-bt">
+  <section class="panel">
+    <div class="ph"><h2>Backtest · AI sinyal stratejisi</h2></div>
+    <div class="form">
+      <label class="f">Sembol<select class="inp" id="btSym"></select></label>
+      <label class="f">Zaman dilimi<select class="inp" id="btTf"><option>15m</option><option selected>1h</option><option>4h</option><option>1d</option></select></label>
+      <label class="f">Mum sayısı<select class="inp" id="btN"><option>1000</option><option selected>2000</option><option>3000</option><option>5000</option></select></label>
+      <label class="f">AL eşiği (skor ≥)<input class="inp" id="btBuy" type="number" value="30"></label>
+      <label class="f">SAT eşiği (skor ≤)<input class="inp" id="btSell" type="number" value="-30"></label>
+      <label class="f">Stop (×ATR)<input class="inp" id="btStop" type="number" value="1.5" step="0.1"></label>
+      <label class="f">Hedef (×ATR)<input class="inp" id="btTgt" type="number" value="3" step="0.1"></label>
+      <label class="f">Komisyon %<input class="inp" id="btFee" type="number" value="0.1" step="0.01"></label>
+      <label class="f">Kayma %<input class="inp" id="btSlip" type="number" value="0.02" step="0.01"></label>
+      <label class="chk"><input type="checkbox" id="btShort"> Short'a izin ver</label>
+      <label class="chk"><input type="checkbox" id="btOpp" checked> Ters sinyalde çık</label>
+      <button class="btn pri" id="btRun">Backtest çalıştır</button>
+    </div>
+    <div class="note">Sinyal her mumun <b>kapanışında</b> yalnızca o ana kadarki veriyle hesaplanır; işlem bir sonraki mumun <b>açılışında</b> gerçekleşir (lookahead yok). Stop ve hedef aynı mumda değerse önce stop varsayılır. İlk 200 mum gösterge ısınması için kullanılmaz. <b>Geçmiş performans geleceği garanti etmez.</b></div>
+    <div id="btOut"></div>
+  </section>
+</section>
+
+<!-- ======================= SANAL PORTFÖY ======================= -->
+<section class="view" id="v-paper">
+  <div class="mk">
+    <section class="panel c12"><div class="ph"><h2>Sanal portföy (paper trading) — gerçek emir YOK</h2><span class="sp"></span><button class="btn sm sell" id="ppReset">Sıfırla (10.000 USDT)</button></div>
+      <div class="cards" id="ppCards"></div></section>
+    <section class="panel c4"><div class="ph"><h2>Sanal emir</h2></div>
+      <div class="form" style="grid-template-columns:1fr 1fr">
+        <label class="f">Sembol<select class="inp" id="ppSym"></select></label>
+        <label class="f">Tür<select class="inp" id="ppType"><option value="market">Piyasa</option><option value="limit">Limit</option></select></label>
+        <label class="f">Tutar (USDT)<input class="inp" id="ppAmt" type="number" value="1000"></label>
+        <label class="f">Limit fiyatı<input class="inp" id="ppPrice" type="number" step="any" disabled></label>
+        <label class="f">Stop-loss<input class="inp" id="ppSl" type="number" step="any"></label>
+        <label class="f">Kâr al<input class="inp" id="ppTp" type="number" step="any"></label>
+        <button class="btn buy" id="ppBuy">Long / Al</button>
+        <button class="btn sell" id="ppSell">Short / Sat</button>
+      </div>
+      <div class="note" id="ppHint"></div>
+    </section>
+    <section class="panel c8"><div class="ph"><h2>Portföy değeri</h2></div><div class="eqchart" id="ppChart"></div></section>
+    <section class="panel c12"><div class="ph"><h2>Açık pozisyonlar</h2></div><div class="scroll" id="ppPos"></div></section>
+    <section class="panel c6"><div class="ph"><h2>Bekleyen limit emirler</h2></div><div class="scroll" id="ppOrd"></div></section>
+    <section class="panel c6"><div class="ph"><h2>İşlem geçmişi</h2></div><div class="scroll" id="ppHist"></div></section>
+  </div>
+</section>
+
+<!-- ======================= ALARMLAR ======================= -->
+<section class="view" id="v-alerts">
+  <div class="mk">
+    <section class="panel c12"><div class="ph"><h2>Yeni alarm</h2></div>
+      <div class="form">
+        <label class="f">Sembol<select class="inp" id="alSym"></select></label>
+        <label class="f">Tür<select class="inp" id="alType">
+          <option value="price_above">Fiyat üstüne çıkarsa</option><option value="price_below">Fiyat altına inerse</option>
+          <option value="rsi_above">RSI ≥</option><option value="rsi_below">RSI ≤</option><option value="signal_change">AI sinyali değişirse</option></select></label>
+        <label class="f">Değer<input class="inp" id="alVal" type="number" step="any"></label>
+        <label class="f">Zaman dilimi<select class="inp" id="alTf"><option>15m</option><option selected>1h</option><option>4h</option><option>1d</option></select></label>
+        <button class="btn pri" id="alAdd">Alarm ekle</button>
+        <button class="btn" id="alPerm">Tarayıcı bildirimine izin ver</button>
+        <label class="chk"><input type="checkbox" id="alSound" checked> Sesli uyarı</label>
+        <button class="btn" id="alTest">Test</button>
+      </div>
+      <div class="note">Fiyat alarmları canlı akışta anında, RSI/sinyal alarmları her 60 sn'de kontrol edilir. Fiyat/RSI alarmları tetiklenince pasifleşir; sinyal değişimi alarmı sürekli çalışır. Sayfa kapalıyken alarm çalışmaz.</div>
+    </section>
+    <section class="panel c6"><div class="ph"><h2>Aktif alarmlar</h2></div><div class="scroll" id="alList"></div></section>
+    <section class="panel c6"><div class="ph"><h2>Alarm geçmişi</h2><span class="sp"></span><button class="btn sm" id="alClear">Temizle</button></div><div class="scroll" id="alHist"></div></section>
+  </div>
+</section>
+</main>
+
+<footer>Veri: Binance herkese açık piyasa verisi (data-api.binance.vision / data-stream.binance.vision), alternative.me Fear &amp; Greed, CoinGecko global. Grafik: TradingView Lightweight Charts™. Yatırım tavsiyesi değildir.</footer>
+
+<div id="toasts"></div>
+
+<div class="modal" id="settings">
+  <div class="box">
+    <h2>Ayarlar</h2>
+    <div class="in">
+      <b>AI Analist — Anthropic API anahtarı (opsiyonel)</b>
+      <div class="mut" style="font-size:12px">Anahtar yalnızca bu tarayıcının localStorage'ında saklanır ve yalnızca analiz isteğinde doğrudan <code>api.anthropic.com</code>'a gönderilir; başka hiçbir yere gönderilmez. Paylaşılan bilgisayarda kullanmayın. Boş bırakılırsa "Claude ile analiz et" özelliği gizlenir ve kural tabanlı yorum gösterilir. Model: <code>claude-sonnet-5-5</code>. Her analiz API hesabınızdan ücretlendirilir.</div>
+      <input class="inp" id="setKey" type="password" placeholder="sk-ant-..." autocomplete="off">
+      <div style="display:flex;gap:8px"><button class="btn pri" id="setSave">Kaydet</button><button class="btn" id="setDel">Anahtarı sil</button><span class="sp"></span><button class="btn" id="setClose">Kapat</button></div>
+      <hr style="border:0;border-top:1px solid var(--line);width:100%">
+      <b>Veri</b>
+      <div class="mut" style="font-size:12px">Tüm ayarlar, düzen, alarmlar ve sanal portföy bu tarayıcıda (localStorage) tutulur.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="setWipe">Tüm yerel verileri sil</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- Klasik script etiketleri (file:// altında ES module engellendiği için) — sıra önemlidir -->
+<script src="js/indicators.js"></script>
+<script src="js/signals.js"></script>
+<script src="js/backtest.js"></script>
+<script src="js/paper.js"></script>
+<script src="js/util.js"></script>
+<script src="js/data.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/app.js"></script>
+<script src="js/app-dashboard.js"></script>
+<script src="js/app-market.js"></script>
+<script src="js/app-backtest.js"></script>
+<script src="js/app-paper.js"></script>
+<script src="js/app-alerts.js"></script>
+<script src="js/app-ai.js"></script>
+<script src="js/boot.js"></script>
+</body>
+</html>
