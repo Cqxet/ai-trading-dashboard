@@ -1,0 +1,2 @@
+LOG-ERROR: WebSocket connection to 'wss://data-stream.binance.vision/stream?streams=btcusdt@kline_1h/btcusdt@depth20/btcusdt@aggTrade' failed: Ping received after close file:///C:/Users/safak/AppData/Local/Claude-Data/claude_pzs8sxrjxfjjc/scratch-workspaces/a5b8cd72-4132-4adf-b787-a28919a0a552/002705b7-268b-4e3d-a4af-303d2ae551c8/scratch-2026-11-16-e528e5/ai-trading-board/js/data.js
+LOG-ERROR: Failed to load resource: the server responded with a status of 401 () https://api.anthropic.com/v1/messages
