@@ -18,7 +18,7 @@
     initialTRY: 100,
     feeRate: 0.001,        // Binance spot komisyonu %0,1 / işlem
     slipRate: 0.0005,      // kayma/spread tahmini %0,05 / işlem
-    taxRate: 0.0003,       // işlem vergisi tahmini %0,03 / işlem (mevzuata göre değiştirin)
+    taxRate: 0,            // işlem vergisi: 2026 itibarıyla yürürlükte kripto işlem vergisi yok (teklif geri çekildi); gerekirse ayarlardan açın
     profitTaxRate: 0,      // kâr vergisi (varsayılan 0)
     minConf: 55,           // sinyal güveni alt sınırı
     minRR: 1.5,            // risk/ödül alt sınırı
