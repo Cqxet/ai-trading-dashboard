@@ -3,7 +3,9 @@
  * GERÇEK EMİR GÖNDERMEZ. Hiçbir ağ çağrısı içermez.
  *  state = {cash, positions[], orders[], history[], equityLog[], seq}
  *  - market emri: anında verilen piyasa fiyatından dolar.
- *  - limit emri: long → fiyat <= limit, short → fiyat >= limit olduğunda dolar.
+ *  - limit emri: long → fiyat <= limit, short → fiyat >= limit olduğunda
+ *    limit fiyatından dolar. Verildiği anda zaten tetik bölgesindeyse
+ *    (marketable) piyasa fiyatından anında dolar.
  *  - SL/TP: onPrice() ile her fiyat güncellemesinde kontrol edilir.
  *  - Short: teminat = giriş*miktar nakitten ayrılır; PnL = (giriş-fiyat)*miktar.
  * Tarayıcıda window.Paper, node'da module.exports.
@@ -49,20 +51,31 @@
     return p;
   }
 
-  /** Emir ver. Dönen: {ok, error?, position?, order?} */
+  /** Limit emir verildiği anda piyasa fiyatı zaten tetik bölgesinde mi? */
+  function marketable(o, marketPrice) {
+    if (o.type !== 'limit' || !(marketPrice > 0) || !(o.price > 0)) return false;
+    return o.side === 'long' ? marketPrice <= o.price : marketPrice >= o.price;
+  }
+
+  /** Emir ver. Dönen: {ok, error?, position?, order?, marketable?} */
   function placeOrder(st, o, marketPrice, now) {
     o = Object.assign({ type: 'market' }, o);
     o.qty = +o.qty; if (o.price != null) o.price = +o.price; if (o.sl) o.sl = +o.sl; if (o.tp) o.tp = +o.tp;
+    // Verildiği anda tetik bölgesindeki limit emir (ör. piyasanın üstünde alış limiti)
+    // gerçek borsada olduğu gibi limit fiyatından değil, daha iyi olan piyasa fiyatından
+    // hemen dolar. Doğrulama (bakiye, stop/hedef yönü) bu dolum fiyatına göre yapılır.
+    // Not: burada onPrice() çağrılmaz; aksi halde aynı semboldeki diğer pozisyonların
+    // SL/TP olayları sessizce yutulurdu (olaylar yalnızca ticker akışında üretilir).
+    var asMarket = marketable(o, marketPrice);
+    if (asMarket) o = Object.assign({}, o, { type: 'market' });
     var err = validate(o, st, marketPrice);
     if (err) return { ok: false, error: err };
-    if (o.type === 'market') return { ok: true, position: fill(st, o, marketPrice, now) };
+    if (o.type === 'market') return { ok: true, position: fill(st, o, marketPrice, now), marketable: asMarket };
     // limit: teminat rezerve edilir
     var reserve = o.price * o.qty * (1 + st.feeRate);
     st.cash -= reserve;
     var ord = { id: st.seq++, sym: o.sym, side: o.side, type: 'limit', qty: o.qty, price: o.price, sl: o.sl || null, tp: o.tp || null, reserve: reserve, createdAt: now };
     st.orders.push(ord);
-    // Zaten tetik bölgesindeyse hemen dolsun
-    onPrice(st, o.sym, marketPrice, now);
     return { ok: true, order: ord };
   }
 
@@ -125,6 +138,6 @@
     if (st.equityLog.length > 5000) st.equityLog.shift();
   }
 
-  return { create: create, placeOrder: placeOrder, cancelOrder: cancelOrder, closePosition: closePosition, onPrice: onPrice,
+  return { create: create, placeOrder: placeOrder, marketable: marketable, cancelOrder: cancelOrder, closePosition: closePosition, onPrice: onPrice,
     equity: equity, unrealized: unrealized, logEquity: logEquity, FEE: FEE };
 });

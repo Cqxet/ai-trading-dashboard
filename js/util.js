@@ -97,5 +97,15 @@
     return { fire: false };
   }
 
-  return { fmt: fmt, fmtBig: fmtBig, pct: pct, esc: esc, squarify: squarify, positionSize: positionSize, evalAlert: evalAlert };
+  /** Alarmı durdur / etkinleştir. Yeniden etkinleştirilen sinyal değişimi alarmının
+   *  eski etiketi (durdurulduğu andan kalma) silinir; aksi halde duraklama sırasında
+   *  olmuş bir değişim, etkinleştirilir etkinleştirilmez yanlış alarm üretirdi.
+   *  Taban etiket bir sonraki kontrolde yeniden öğrenilir. */
+  function toggleAlert(a) {
+    a.active = !a.active;
+    if (a.active && a.type === 'signal_change') a.lastLabel = null;
+    return a;
+  }
+
+  return { fmt: fmt, fmtBig: fmtBig, pct: pct, esc: esc, squarify: squarify, positionSize: positionSize, evalAlert: evalAlert, toggleAlert: toggleAlert };
 });

@@ -148,6 +148,18 @@ test('Backtest: stop aynı mumda hedeften önce varsayılır (muhafazakâr) ve k
   assert.equal(r.trades[0].reason, 'Stop'); close(r.trades[0].exit, 90);
   assert.ok(r.trades[0].pnl < -1000 * 0.999, 'zarar + komisyon');
 });
+test('Backtest: short + ters sinyalde yön değiştirme (flip) — bilinen PnL', () => {
+  // i=250 SAT → 251 açılışta 100'den short; i=300 AL → 301 açılışta 90'dan kapat + long aç
+  const cs = Array.from({ length: 400 }, (_, i) => { const p = i <= 300 ? 100 : 90; return { time: i * 3600, open: p, high: p + 0.1, low: p - 0.1, close: p, volume: 1 }; });
+  const sig = (c, ind, i) => ({ label: i === 250 ? 'SAT' : i === 300 ? 'AL' : 'BEKLE', atr: 50, score: 0 });
+  const r = BT.run(cs, { feePct: 0, slippagePct: 0, warmup: 200, atrStop: 1, atrTarget: 10, allowShort: true }, sig);
+  assert.equal(r.trades.length, 2);
+  const [s, l] = r.trades;
+  assert.equal(s.side, 'short'); assert.equal(s.entryIdx, 251); assert.equal(s.exitIdx, 301); assert.equal(s.reason, 'Ters sinyal');
+  close(s.entry, 100); close(s.exit, 90); close(s.pnl, 1000, 1e-6);
+  assert.equal(l.side, 'long'); assert.equal(l.entryIdx, 301); close(l.entry, 90);
+  close(r.metrics.totalReturn, 10, 1e-6);
+});
 test('Backtest metrikleri: buy&hold ve Sharpe tanımlı', () => {
   const r = BT.run(synth(1100, 9, 0.05), {});
   assert.ok(isFinite(r.metrics.buyHold) && isFinite(r.metrics.sharpe) && r.metrics.maxDD >= 0);
@@ -198,6 +210,39 @@ test('Paper: limit emir rezervi, dolum ve iptal', () => {
   const r2 = Paper.placeOrder(st, { sym: 'SOLUSDT', side: 'long', type: 'limit', price: 80, qty: 1 }, 89, 4);
   assert.ok(Paper.cancelOrder(st, r2.order.id)); close(st.cash, 1000 - 450.45);
 });
+test('Paper: tetik bölgesindeki limit emir piyasa fiyatından anında dolar (long ve short)', () => {
+  const st = Paper.create(10000);
+  // Piyasa 100, alış limiti 110 → gerçek borsada olduğu gibi 100'den dolmalı (110'dan değil)
+  const r = Paper.placeOrder(st, { sym: 'SOLUSDT', side: 'long', type: 'limit', price: 110, qty: 10 }, 100, 1);
+  assert.ok(r.ok && r.position && r.marketable, JSON.stringify(r));
+  assert.equal(st.orders.length, 0); close(r.position.entry, 100);
+  close(st.cash, 10000 - 1000 - 1, 1e-9);
+  // Piyasa 100, satış limiti 90 → 100'den short
+  const r2 = Paper.placeOrder(st, { sym: 'ETHUSDT', side: 'short', type: 'limit', price: 90, qty: 1 }, 100, 2);
+  assert.ok(r2.ok && r2.position && r2.marketable); close(r2.position.entry, 100);
+  // Tetik bölgesinde olmayan limit normal şekilde bekler
+  const r3 = Paper.placeOrder(st, { sym: 'ETHUSDT', side: 'short', type: 'limit', price: 120, qty: 1 }, 100, 3);
+  assert.ok(r3.ok && r3.order && !r3.position);
+  assert.equal(Paper.marketable({ type: 'limit', side: 'long', price: 99 }, 100), false);
+  assert.equal(Paper.marketable({ type: 'market', side: 'long' }, 100), false);
+});
+test('Paper: tetik bölgesindeki limit emrin stop/hedefi gerçek dolum fiyatına göre doğrulanır', () => {
+  const st = Paper.create(10000);
+  // Limit 110 ama dolum 100'den olur → 105'teki "stop" girişin üstünde kalır, reddedilmeli
+  const r = Paper.placeOrder(st, { sym: 'SOLUSDT', side: 'long', type: 'limit', price: 110, qty: 1, sl: 105 }, 100, 1);
+  assert.ok(!r.ok); assert.match(r.error, /stop/);
+  close(st.cash, 10000); assert.equal(st.positions.length + st.orders.length, 0);
+});
+test('Paper: emir vermek aynı semboldeki diğer pozisyonların SL/TP olaylarını yutmaz', () => {
+  const st = Paper.create(10000);
+  const p = Paper.placeOrder(st, { sym: 'BTCUSDT', side: 'long', qty: 0.01, tp: 105 }, 100, 1).position;
+  // Fiyat 106'ya çıktı ama henüz ticker işlenmedi; bu sırada yeni bir limit emir veriliyor
+  const r = Paper.placeOrder(st, { sym: 'BTCUSDT', side: 'long', type: 'limit', price: 90, qty: 0.01 }, 106, 2);
+  assert.ok(r.ok && r.order);
+  assert.ok(st.positions.some(x => x.id === p.id), 'pozisyon sessizce kapatılmamalı');
+  const ev = Paper.onPrice(st, 'BTCUSDT', 106, 3);
+  assert.equal(ev.length, 1); assert.equal(ev[0].type, 'tp'); // olay arayüze ulaşır (bildirim/ses)
+});
 test('Paper: doğrulama hataları (bakiye, stop yönü)', () => {
   const st = Paper.create(100);
   assert.match(Paper.placeOrder(st, { sym: 'X', side: 'long', qty: 1 }, 1000, 1).error, /Yetersiz/);
@@ -225,4 +270,15 @@ test('Alarm değerlendirme: fiyat, RSI, sinyal değişimi', () => {
   const a = { type: 'signal_change', sym: 'BTCUSDT', tf: '1h', lastLabel: null };
   let r = U.evalAlert(a, { label: 'BEKLE' }); assert.ok(!r.fire); a.lastLabel = r.newLabel;
   r = U.evalAlert(a, { label: 'AL' }); assert.ok(r.fire); assert.match(r.msg, /BEKLE → AL/);
+});
+test('Alarm: durdurulup yeniden etkinleştirilen sinyal alarmı eski etiketle yanlış tetiklenmez', () => {
+  const a = { type: 'signal_change', sym: 'BTCUSDT', tf: '1h', active: true, lastLabel: 'BEKLE' };
+  U.toggleAlert(a); assert.equal(a.active, false); assert.equal(a.lastLabel, 'BEKLE');
+  U.toggleAlert(a); assert.equal(a.active, true); assert.equal(a.lastLabel, null);
+  // Duraklama sırasında AL'a dönmüş olsa da ilk kontrol yalnızca taban etiketi öğrenir
+  let r = U.evalAlert(a, { label: 'AL' }); assert.ok(!r.fire); a.lastLabel = r.newLabel;
+  r = U.evalAlert(a, { label: 'SAT' }); assert.ok(r.fire);
+  // Fiyat alarmının değeri/durumu dışında bir şey değişmez
+  const p = { type: 'price_above', sym: 'BTCUSDT', value: 100, active: false };
+  U.toggleAlert(p); assert.equal(p.active, true); assert.equal(p.value, 100);
 });

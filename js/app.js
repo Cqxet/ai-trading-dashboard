@@ -118,9 +118,12 @@
 
   /* ---------- İzleme listesi sinyal taraması ---------- */
   var sig = {};           // sym → {g, closes, volRatio, spark, tf, t}
-  var scanning = false;
+  var scanning = false, rescan = false;
   async function refreshSigs() {
-    if (scanning) return; scanning = true;
+    // Tarama sürerken gelen istek (ör. RSI tarayıcıda zaman dilimi değişti) kaybolmasın:
+    // mevcut tur bitince bir kez daha taranır.
+    if (scanning) { rescan = true; return; }
+    scanning = true; rescan = false;
     var tf = S.scanTf, done = 0;
     await Promise.all(SYMBOLS.map(async function (s) {
       try {
@@ -135,6 +138,7 @@
       if (++done % 10 === 0) emit('sigs', tf);
     }));
     scanning = false; emit('sigs', tf);
+    if (rescan || S.scanTf !== tf) refreshSigs();
   }
 
   /* ---------- Yardımcı: dropdown menüler ---------- */

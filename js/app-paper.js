@@ -26,7 +26,7 @@
     var qty = amt / ref;
     var r = Paper.placeOrder(st, { sym: sym, side: side, type: type, qty: qty, price: type === 'limit' ? lim : null, sl: +$('ppSl').value || null, tp: +$('ppTp').value || null }, px, Date.now());
     if (!r.ok) { App.toast('Emir reddedildi: ' + r.error, 'bad'); return; }
-    App.toast(r.position ? 'Sanal ' + (side === 'long' ? 'LONG' : 'SHORT') + ' açıldı: ' + fmt(qty, 6) + ' ' + App.base(sym) + ' @ ' + fmt(px) : 'Sanal limit emir eklendi @ ' + fmt(lim), 'ok');
+    App.toast(r.position ? 'Sanal ' + (side === 'long' ? 'LONG' : 'SHORT') + ' açıldı: ' + fmt(qty, 6) + ' ' + App.base(sym) + ' @ ' + fmt(px) + (r.marketable ? ' (limit tetik bölgesindeydi, piyasa fiyatından doldu)' : '') : 'Sanal limit emir eklendi @ ' + fmt(lim), 'ok');
     save(); render(true);
   }
 

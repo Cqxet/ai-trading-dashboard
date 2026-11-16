@@ -40,6 +40,8 @@
         if (cached && cached.tf === a.tf && Date.now() - cached.t < 90000) g = cached.g;
         else g = Signals.analyze((await Data.klines(a.sym, a.tf, 300, 50000)).slice(0, -1));
         if (!g) continue;
+        // await sırasında silinen / durdurulan alarm tetiklenmesin
+        if (alerts.indexOf(a) < 0 || !a.active) continue;
         var r = U.evalAlert(a, { rsi: g.snap.rsi, label: g.label });
         if (r.newLabel) a.lastLabel = r.newLabel;
         if (r.fire) { if (a.type !== 'signal_change') a.active = false; fire(a, r.msg); }
@@ -91,7 +93,7 @@
       $('v-alerts').addEventListener('click', function (e) {
         var d = e.target.dataset.del, t = e.target.dataset.tog;
         if (d) { alerts = alerts.filter(function (a) { return a.id !== +d; }); save(); render(); }
-        if (t) { var a = alerts.find(function (x) { return x.id === +t; }); if (a) { a.active = !a.active; save(); render(); } }
+        if (t) { var a = alerts.find(function (x) { return x.id === +t; }); if (a) { U.toggleAlert(a); save(); render(); } }
       });
       App.on('tick', onTick);
       App.on('view', function (v) { if (v === 'alerts') { $('alSym').value = App.S.sym; syncForm(); } });

@@ -83,7 +83,7 @@ Saf modüller UMD kalıbındadır: tarayıcıda `window.TA / Signals / Backtest 
 
 ```bash
 cd ai-trading-board
-node --test tests/indicators.test.js tests/engine.test.js   # 40 birim testi
+node --test tests/indicators.test.js tests/engine.test.js   # 45 birim testi
 node tests/live-check.js                                     # canlı API + gerçek veride backtest (internet)
 node tests/e2e-chrome.js                                     # headless Chrome ile uçtan uca (Chrome/Edge kurulu olmalı)
 ```
@@ -92,7 +92,7 @@ node tests/e2e-chrome.js                                     # headless Chrome i
 
 - Sinyaller basit kural tabanlı teknik analizdir; "AI" adı skor motorunu ifade eder, makine öğrenmesi modeli değildir. Gerçek veride yapılan örnek backtestlerde strateji bazı dönemlerde al-tut'un altında kalmıştır.
 - Backtest: tek pozisyon, sermayenin tamamı, sabit komisyon/kayma; fonlama, likidite, emir defteri derinliği ve kısmi dolum modellenmez. Mum içi sıra bilinmediği için stop/hedef çakışmasında muhafazakâr varsayım yapılır.
-- Sanal portföy limit emirleri yalnızca ~1 sn'lik ticker fiyatlarıyla kontrol edilir (mum içi fitiller kaçabilir); short pozisyonlar teminat = nominal değer ile basitleştirilmiştir; kaldıraç/tasfiye yoktur.
+- Sanal portföy limit emirleri yalnızca ~1 sn'lik ticker fiyatlarıyla kontrol edilir (mum içi fitiller kaçabilir); verildiği anda tetik bölgesindeki limit emir piyasa fiyatından hemen dolar, sonradan tetiklenen limit emir limit fiyatından dolar; short pozisyonlar teminat = nominal değer ile basitleştirilmiştir; kaldıraç/tasfiye yoktur.
 - Alarmlar ve canlı akış yalnızca sayfa açıkken çalışır. Bazı tarayıcılar `file://` sayfalarına bildirim izni vermez; bu durumda sayfa içi uyarı + ses kullanılır. Ses, sayfayla ilk etkileşimden sonra çalabilir (tarayıcı otomatik oynatma kuralı).
 - Binance ağırlık başlıkları CORS ile açılmadığından tarayıcıda okunamaz; ağırlık yerelde tahmin edilir. Binance'in erişilemediği bölgelerde (ör. bazı ülkeler/ağlar) veri gelmeyebilir.
 - CoinGecko ücretsiz API'si zaman zaman 429 döndürebilir; panel bunu gösterir ve sonra tekrar dener.
