@@ -26,6 +26,7 @@
     App.dashboard.init();
     App.market.init();
     App.backtest.init();
+    App.sim.init();
     App.paper.init();
     App.bot.init();
     App.alerts.init();

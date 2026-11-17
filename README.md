@@ -45,6 +45,30 @@ Derin bağlantılar: `index.html#market`, `#bt`, `#paper`, `#alerts`, `#grid`; `
 - İstek: model `claude-sonnet-5-5`, `output_config.effort: "low"`, sunucu tarafı yedek model (`fallbacks: "default"`, beta `server-side-fallback-2026-07-01`; reddedilirse yedeksiz tekrar denenir). `stop_reason: "refusal"` ve hata kodları (401/429/529) anlaşılır mesajla gösterilir.
 - Her analiz API hesabınızdan ücretlendirilir. LLM çıktısı hatalı olabilir.
 
+## AI Simülasyon (9router / OpenAI uyumlu LLM)
+
+`AI Simülasyon` sekmesi, bir LLM'i **gerçek geçmiş Binance mumları üzerinde adım adım karar verici** olarak çalıştırır ve sonucu gerçek performans ölçütleriyle raporlar. Gerçek emir göndermez.
+
+**Kurulum (9router):** `npm install -g 9router` → `9router` → panel `http://localhost:20128/dashboard` → sağlayıcı/combo ekleyip API anahtarını kopyalayın. Sekmede Base URL `http://localhost:20128/v1` (varsayılan), anahtar ve model/combo adını girip **Bağlantıyı test et** deyin. OpenAI uyumlu herhangi bir uç nokta (`/v1/chat/completions`, `/v1/models`) çalışır.
+
+**Nasıl çalışır (lookahead yok):** her `decisionEvery` mumun kapanışında yalnızca o ana kadarki veriden hesaplanan gösterge anlık görüntüsü modele gönderilir (JSON karar: al / sat / bekle + güven + stop/hedef çarpanı + gerekçe). İşlem **sonraki mumun açılışında** komisyon + kayma ile gerçekleşir; stop/hedef mum içi high/low ile kontrol edilir, aynı mumda ikisi de değerse önce stop. Pozisyonsuzken yalnızca kural skoru |skor| ≥ geçit ise model çağrılır. Çağrı üst sınırına ulaşılırsa dönem orada biter (ölçütler yalnızca karar verilen pencereyi kapsar). Sembol ve tarih varsayılan olarak modelden **gizlenir**.
+
+**Ölçütler:** getiri, yıllıklandırılmış getiri, Sharpe (+ %95 blok-bootstrap güven aralığı, P(Sharpe>0)), Sortino, Calmar, maks. düşüş ve en uzun su altı süresi, kazanma oranı, kâr faktörü, ödeme oranı, beklenti/işlem, ödenen komisyon, devir, piyasada kalma; LLM çağrı/token/gecikme. **Karşılaştırmalar:** al-tut, kural motoru (aynı mumlar ve maliyetler) ve **rastgele-giriş Monte Carlo** (aynı işlem sayısı ve tutma süreleriyle; p-değeri "AI şansla bu kadar iyi olabilir mi?" sorusunu cevaplar).
+
+**Komut satırı (CORS sorunu olmadan):**
+
+```bash
+export LLM_API_KEY=...        # 9router anahtarı (PowerShell: $env:LLM_API_KEY='...')
+node tools/run-sim.js --list-models
+node tools/run-sim.js --symbol BTCUSDT --tf 1h --bars 1500 --model <model-veya-combo> --max-decisions 150
+node tools/run-sim.js --dry-run          # LLM'siz kural karar vericisiyle deneme
+```
+
+**Dürüstlük notları:**
+1. Birkaç düzine işlem istatistiksel olarak zayıf örnektir; arayüz uyarır.
+2. LLM'ler eğitim verisinden geçmiş piyasayı hatırlıyor olabilir; anonimleştirme riski azaltır, dışlamaz. Asıl güvenilir sınama, simülasyonu modelin eğitiminden sonraki (canlıya yakın) veriyle ve ileriye doğru tekrarlamaktır.
+3. Gerçek 9router/LLM yanıtlarıyla başarılı bir uçtan uca çalıştırma bu depoda henüz doğrulanmadı; testler OpenAI uyumlu **sahte** bir sunucuyla yapıldı (istemci, CORS ön kontrolü, ayrıştırma, hata/iptal yolları).
+
 ## Mimari
 
 ```
@@ -56,6 +80,8 @@ ai-trading-board/
 │   ├── signals.js        # SAF: sinyal motoru v2 (computeIndicators, scoreAt, analyze, formasyon, D/D, rejim, MTF, kural yorumu)
 │   ├── backtest.js       # SAF: backtest motoru + Binance sayfalama (fetchHistory)
 │   ├── paper.js          # SAF: sanal portföy durum geçişleri (ağ yok)
+│   ├── aisim.js          # SAF: LLM istemcisi (OpenAI uyumlu) + walk-forward simülasyon + ölçütler + Monte Carlo
+│   ├── app-sim.js        # AI Simülasyon sekmesi arayüzü
 │   ├── util.js           # SAF: biçimlendirme, squarified treemap, risk hesabı, alarm değerlendirme
 │   ├── data.js           # Ağ: REST kuyruğu/yedek/rate-limit, WebSocket yöneticisi
 │   ├── charts.js         # lightweight-charts sarmalayıcısı (ChartView): göstergeler, alt paneller, çizimler
@@ -83,7 +109,8 @@ Saf modüller UMD kalıbındadır: tarayıcıda `window.TA / Signals / Backtest 
 
 ```bash
 cd ai-trading-board
-node --test tests/indicators.test.js tests/engine.test.js   # 45 birim testi
+node --test tests/*.test.js                                  # birim testleri (gösterge, motor, bot, aisim)
+node tests/e2e-sim.js                                        # AI Simülasyon sekmesi E2E (sahte OpenAI sunucusuyla)
 node tests/live-check.js                                     # canlı API + gerçek veride backtest (internet)
 node tests/e2e-chrome.js                                     # headless Chrome ile uçtan uca (Chrome/Edge kurulu olmalı)
 ```

@@ -16,6 +16,7 @@
     <button data-v="grid">Çoklu grafik</button>
     <button data-v="market">Piyasa</button>
     <button data-v="bt">Backtest</button>
+    <button data-v="sim">AI Simülasyon</button>
     <button data-v="paper">Sanal portföy</button>
     <button data-v="bot">AI Bot</button>
     <button data-v="alerts">Alarmlar <span id="alertCount" class="mut"></span></button>
@@ -156,6 +157,36 @@
   </section>
 </section>
 
+<!-- ======================= AI SİMÜLASYON ======================= -->
+<section class="view" id="v-sim">
+  <section class="panel">
+    <div class="ph"><h2>AI Simülasyon · LLM karar verici (9router / OpenAI uyumlu)</h2></div>
+    <div class="form">
+      <label class="f">Base URL<input class="inp" id="llmUrl" value="http://localhost:20128/v1" autocomplete="off"></label>
+      <label class="f">Model / combo<input class="inp" id="llmModel" list="llmModels" placeholder="Bağlantıyı test edince listelenir" autocomplete="off"><datalist id="llmModels"></datalist></label>
+      <label class="f">API anahtarı<input class="inp" id="llmKey" type="password" placeholder="9router panelindeki anahtar" autocomplete="off"></label>
+      <button class="btn" id="llmTest">Bağlantıyı test et</button><span id="llmStatus" class="mut"></span>
+    </div>
+    <div class="form">
+      <label class="f">Karar verici<select class="inp" id="simMode"><option value="llm" selected>LLM (9router)</option><option value="rule">Kural (referans, LLM yok)</option></select></label>
+      <label class="f">Sembol<select class="inp" id="simSym"></select></label>
+      <label class="f">Zaman dilimi<select class="inp" id="simTf"><option>15m</option><option selected>1h</option><option>4h</option><option>1d</option></select></label>
+      <label class="f">Mum sayısı<select class="inp" id="simN"><option>700</option><option selected>1000</option><option>1500</option><option>2500</option><option>5000</option></select></label>
+      <label class="f">Karar sıklığı (mum)<input class="inp" id="simEvery" type="number" value="4" min="1"></label>
+      <label class="f">Geçit |skor| ≥<input class="inp" id="simGate" type="number" value="15" min="0"></label>
+      <label class="f">Maks. LLM çağrısı<input class="inp" id="simMax" type="number" value="60" min="1"></label>
+      <label class="f">Min. güven %<input class="inp" id="simConf" type="number" value="50" min="0" max="100"></label>
+      <label class="f">Komisyon %<input class="inp" id="simFee" type="number" value="0.1" step="0.01"></label>
+      <label class="f">Kayma %<input class="inp" id="simSlip" type="number" value="0.02" step="0.01"></label>
+      <label class="chk"><input type="checkbox" id="simAnon" checked> Sembol/tarihi modelden gizle</label>
+      <button class="btn pri" id="simRun">Simülasyonu başlat</button><button class="btn" id="simStop" disabled>Durdur</button>
+    </div>
+    <div class="note">Gerçek geçmiş Binance mumları üzerinde <b>adım adım</b> çalışır: karar her mumun kapanışında yalnızca o ana kadarki verilerle LLM'den istenir, işlem sonraki açılışta komisyon+kayma ile gerçekleşir. Pozisyonsuzken yalnızca kural skoru |skor| ≥ geçit ise model çağrılır (maliyet/süre için). Sonuçlar al-tut, kural motoru ve rastgele-giriş Monte Carlo ile karşılaştırılır. 9router CORS izni vermezse <code>node tools/run-sim.js</code> kullanın. Anahtar yalnızca bu tarayıcıda ve yalnızca yukarıdaki Base URL'ye gider. <b>Gerçek emir gönderilmez.</b></div>
+    <div id="simProg"></div>
+    <div id="simOut"></div>
+  </section>
+</section>
+
 <!-- ======================= SANAL PORTFÖY ======================= -->
 <section class="view" id="v-paper">
   <div class="mk">
@@ -256,6 +287,7 @@
 <script src="js/indicators.js"></script>
 <script src="js/signals.js"></script>
 <script src="js/backtest.js"></script>
+<script src="js/aisim.js"></script>
 <script src="js/paper.js"></script>
 <script src="js/bot.js"></script>
 <script src="js/util.js"></script>
@@ -267,6 +299,7 @@
 <script src="js/app-backtest.js"></script>
 <script src="js/app-paper.js"></script>
 <script src="js/app-bot.js"></script>
+<script src="js/app-sim.js"></script>
 <script src="js/app-alerts.js"></script>
 <script src="js/app-ai.js"></script>
 <script src="js/boot.js"></script>
