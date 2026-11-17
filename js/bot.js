@@ -40,6 +40,9 @@
     globalGuard: true,     // tüm işlemlerin birleşik (unutmalı) ortalaması < 0 ise hiçbir kova girişi açamaz; yalnızca deneme işlemi
     memRequire: false,     // true: pozitif kanıt olmayan bölgede işlem açma (nakitte kal); yalnızca küçük deneme işlemleriyle öğren
     probeMin: 240,         // bloklu durumdayken en fazla bu kadar dakikada bir küçük (×0,3) deneme işlemi: rejim değişimini fark etmek için
+    trendRule: 'donchian', // günlük trend modu kuralı: donchian (55g kırılım/20g dip çıkış) | sma (kapanış>SMA200) | ema (EMA50>EMA200)
+    trendDisasterStop: 0.4, // yalnızca felaket koruması: girişten %40 düşüşte kuraldan bağımsız çık
+    trendMaxAgeH: 36,      // günlük trend verisi bu kadar saatten eskiyse karar verilmez
     streakPause: 4         // üst üste bu kadar zarardan sonra giriş molası (dk = 15 x fazla zarar)
   };
 
@@ -51,6 +54,7 @@
     fast:     { mode: 'fast',     minConf: 35, minRR: 1.2, minNetGain: 0.004,  maxPos: 4, cooldownMin: 10, maxHoldH: 3,    maxTradesPerHour: 24,  sigMaxAgeMin: 3,   tf: '15m', scanSec: 30, topN: 20, buyTh: 20, atrStop: 1.2, atrTarget: 2.0 },
     veryfast: { mode: 'veryfast', minConf: 30, minRR: 1.1, minNetGain: 0.003,  maxPos: 5, cooldownMin: 5,  maxHoldH: 1.5,  maxTradesPerHour: 40,  sigMaxAgeMin: 2,   tf: '5m',  scanSec: 20, topN: 25, buyTh: 15, atrStop: 1.0, atrTarget: 1.6 },
     extreme:  { mode: 'extreme',  minConf: 25, minRR: 1.0, minNetGain: 0.002,  maxPos: 6, cooldownMin: 2,  maxHoldH: 0.75, maxTradesPerHour: 80,  sigMaxAgeMin: 1.5, tf: '3m',  scanSec: 12, topN: 30, buyTh: 10, atrStop: 0.9, atrTarget: 1.3 },
+    trend:    { mode: 'trend',    minConf: 0,  minRR: 0,   minNetGain: 0,      maxPos: 8, cooldownMin: 0,  maxHoldH: 1e6,  maxTradesPerHour: 30,  sigMaxAgeMin: 2160, tf: '1d',  scanSec: 1800, topN: 20, buyTh: 0,  atrStop: 0,   atrTarget: 0 },
     super:    { mode: 'super',    minConf: 20, minRR: 1.0, minNetGain: 0.0015, maxPos: 8, cooldownMin: 1,  maxHoldH: 0.33, maxTradesPerHour: 150, sigMaxAgeMin: 1,   tf: '1m',  scanSec: 8,  topN: 30, buyTh: 8,  atrStop: 0.8, atrTarget: 1.1 }
   };
   /* =================== ÖĞRENEN HAFIZA ===================
@@ -110,6 +114,63 @@
     Object.keys(sigs || {}).forEach(function (k) { var g = sigs[k] && sigs[k].g, sn = g && g.snap; if (!sn || sn.ema20 == null || sn.ema50 == null) return; n++; if (sn.ema20 > sn.ema50 && g.price > sn.ema50) up++; });
     var b = n >= 5 ? up / n : null;
     return { breadth: b, n: n, state: b == null ? 'na' : b < 0.25 ? 'bear' : b < 0.5 ? 'weak' : b < 0.75 ? 'ok' : 'bull' };
+  }
+
+  /* =================== GÜNLÜK TREND (kural tabanlı, paper) ===================
+   * Araştırma (tools/research-daily.js): klasik trend kuralları al-tut ile benzer getiriyi daha küçük maks. düşüşle verdi; kâr garantisi YOK.
+   * cs: KAPANMIŞ günlük mumlar (artan zaman). Dönen: {want: 1|0|null, why}. Yalnızca cs[0..son] verisini kullanır. */
+  function trendWant(cs, rule) {
+    var n = cs.length, c = function (i) { return cs[i].close; };
+    if (rule === 'sma') {
+      if (n < 200) return { want: null, why: 'veri az' };
+      var m = 0; for (var i = n - 200; i < n; i++) m += c(i); m /= 200;
+      return { want: c(n - 1) > m ? 1 : 0, why: 'kapanış ' + (c(n - 1) > m ? '>' : '<') + ' SMA200' };
+    }
+    if (rule === 'ema') {
+      if (n < 210) return { want: null, why: 'veri az' };
+      var e50 = c(0), e200 = c(0), k50 = 2 / 51, k200 = 2 / 201;
+      for (var j = 1; j < n; j++) { e50 = c(j) * k50 + e50 * (1 - k50); e200 = c(j) * k200 + e200 * (1 - k200); }
+      return { want: e50 > e200 ? 1 : 0, why: 'EMA50 ' + (e50 > e200 ? '>' : '<') + ' EMA200' };
+    }
+    // donchian: 55g en yüksek kapanış/yüksek kırılımı ile gir, 20g en düşük dibin altında kapanışla çık (durum geçmişten taranır)
+    var EN = 55, EX = 20; if (n < EN + 2) return { want: null, why: 'veri az' };
+    var st = 0, why = 'kırılım yok';
+    for (var t = EN + 1; t < n; t++) {
+      var hh = -Infinity, ll = Infinity, a, b;
+      for (a = t - EN; a < t; a++) if (cs[a].high > hh) hh = cs[a].high;
+      for (b = t - EX; b < t; b++) if (cs[b].low < ll) ll = cs[b].low;
+      if (!st && c(t) > hh) { st = 1; why = '55g kırılımı'; } else if (st && c(t) < ll) { st = 0; why = '20g dip kırıldı'; }
+    }
+    return { want: st, why: st ? 'yükseliş durumunda (55g kırılımı)' : why };
+  }
+  /** Trend modu karar turu. ctx.trend = {sym: {want, t, why, rank}}; sabit stop/hedef yok, kural çıkışı belirler. */
+  function stepTrend(st, ctx, now) {
+    var s = st.s, ev = [], fx = ctx.fx, tr = ctx.trend || {}, maxAge = s.trendMaxAgeH * 3600e3, blk = st.tblock || (st.tblock = {});
+    // felaket stopundan sonra aynı sembole, kural bir kez 0'a dönüp yeniden 1 olana kadar girilmez
+    Object.keys(tr).forEach(function (k) { if (tr[k] && tr[k].want === 0 && now - tr[k].t < maxAge) delete blk[k]; });
+    st.positions.slice().forEach(function (p) {
+      var px = ctx.prices[p.sym]; if (!(px > 0)) return;
+      var t = tr[p.sym], reason = null;
+      if (px <= p.entry * (1 - s.trendDisasterStop)) reason = 'Felaket stopu';
+      else if (t && t.want === 0 && now - t.t < maxAge) reason = 'Trend bitti (' + (t.why || '') + ')';
+      if (reason) { var rec = sell(st, p.id, px, fx, now, reason); if (rec && reason === 'Felaket stopu') blk[p.sym] = true; if (rec) { ev.push({ type: 'sell', rec: rec }); note(st, now, 'SAT ' + p.sym + ' (' + reason + ') net ' + rec.pnl.toFixed(2) + ' TL'); } }
+    });
+    if (st.positions.length >= s.maxPos) return ev;
+    var eq = equity(st, ctx.prices, fx), cands = [];
+    Object.keys(tr).forEach(function (sym) {
+      var t = tr[sym], px = ctx.prices[sym];
+      if (!t || t.want !== 1 || !(px > 0) || now - t.t > maxAge) return;
+      if (blk[sym] || st.positions.some(function (p) { return p.sym === sym; })) return;
+      cands.push({ sym: sym, px: px, t: t });
+    });
+    cands.sort(function (a, b) { return (a.t.rank == null ? 1e9 : a.t.rank) - (b.t.rank == null ? 1e9 : b.t.rank); });
+    for (var i = 0; i < cands.length && st.positions.length < s.maxPos; i++) {
+      var c = cands[i], invest = Math.min(st.cash, eq / s.maxPos);
+      if (invest < s.minOrderTRY) break;
+      var p = buy(st, c.sym, c.px, fx, invest, 0, 1e18, now, 'günlük trend: ' + (c.t.why || ''), null);
+      if (p) { ev.push({ type: 'buy', position: p }); note(st, now, 'AL ' + c.sym + ' ' + invest.toFixed(2) + ' TL (günlük trend: ' + (c.t.why || '') + ')'); }
+    }
+    return ev;
   }
 
   function applyMode(st, mode) { Object.assign(st.s, PRESETS[mode] || PRESETS.normal); }
@@ -172,6 +233,7 @@
   function step(st, ctx, now) {
     var s = st.s, ev = [], fx = ctx.fx, cr = costRate(s); if (!st.mem) st.mem = newMem();
     if (!(fx > 0)) return ev;
+    if (s.mode === 'trend') return stepTrend(st, ctx, now);
     st.tradeTimes = st.tradeTimes.filter(function (t) { return now - t < 3600e3; });
 
     // 1) Çıkışlar
@@ -226,5 +288,5 @@
     return ev;
   }
 
-  return { newMem: newMem, memCheck: memCheck, memLearn: memLearn, marketState: marketState, featOf: featOf, DEFAULTS: DEFAULTS, PRESETS: PRESETS, applyMode: applyMode, create: create, costRate: costRate, buy: buy, sell: sell, step: step, equity: equity, logEquity: logEquity };
+  return { trendWant: trendWant, stepTrend: stepTrend, newMem: newMem, memCheck: memCheck, memLearn: memLearn, marketState: marketState, featOf: featOf, DEFAULTS: DEFAULTS, PRESETS: PRESETS, applyMode: applyMode, create: create, costRate: costRate, buy: buy, sell: sell, step: step, equity: equity, logEquity: logEquity };
 });

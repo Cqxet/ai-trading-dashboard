@@ -86,6 +86,15 @@ function check(name, ok, info) { results.push({ name, ok: !!ok }); console.log((
   check('Hafıza kapatılınca panel bunu söyler', await waitFor("/Öğrenen hafıza kapalı/.test(document.getElementById('botMem').innerText)", 20000));
   await ev("(()=>{document.getElementById('botAdaptive').checked=true;document.getElementById('botApply').click()})()");
 
+  // 4c) Günlük trend modu (arayüzden seçilir; gerçek günlük mumlar)
+  await ev("(()=>{document.getElementById('botMode').value='trend';document.getElementById('botApply').click();})()");
+  check('Mod "trend" seçildi ve ön ayar uygulandı', await waitFor("App.bot.state().s.mode==='trend' && App.bot.state().s.maxPos===8 && App.bot.state().s.tf==='1d'", 5000));
+  check('Günlük trend taraması çalıştı (≥15 sembolde kural durumu)', await waitFor("App.bot.health().trend>=15", 90000), await ev('(h=>({trend:h.trend,yukselis:h.trendOn,scans:h.scans,ms:h.scanMs}))(App.bot.health())'));
+  check('Panel günlük trend modunu anlatıyor', await waitFor("/Günlük trend modu/.test(document.getElementById('botNote').innerText) && /felaket stopu/.test(document.getElementById('botNote').innerText)", 15000));
+  check('Trend modunda hafıza/filtre devre dışı (adım trend fonksiyonuyla)', await ev("App.bot.state().s.mode==='trend'"));
+  await ev("(()=>{document.getElementById('botMode').value='super';document.getElementById('botApply').click();})()");
+  check('Hız moduna geri dönüş çalışıyor', await waitFor("App.bot.state().s.mode==='super' && App.bot.state().s.maxPos===8", 5000));
+
   // 5) Durdurunca kilit bırakılır
   await ev("document.getElementById('botToggle').click()");
   check('Bot durdurulunca Web Lock bırakılır', await waitFor('App.bot.health().locked===false', 5000));

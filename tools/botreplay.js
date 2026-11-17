@@ -90,12 +90,43 @@ function replay(P, mode, o) {
     ret1: eq.length ? (eq[Math.floor(eq.length / 2)] / st.initial - 1) * 100 : 0, ret2: eq.length ? (eq[eq.length - 1] / eq[Math.floor(eq.length / 2)] - 1) * 100 : 0 };
 }
 
+/**
+ * Günlük TREND modunun replay'i: gün d'nin AÇILIŞINDA işlem, karar d-1 kapanışına kadarki günlük mumlardan (trendWant).
+ * data: {sym: günlük mumlar}. Sembol sırası = hacim sırası yerine verilen sıra (rank). Disaster stop yalnızca açılış fiyatında kontrol edilir.
+ */
+function replayTrend(data, o) {
+  o = o || {};
+  const st = Bot.create(o.botOpts); Bot.applyMode(st, 'trend'); if (o.botOpts) Object.assign(st.s, o.botOpts); st.s.histCap = 1e6; st.enabled = true;
+  const syms = Object.keys(data).slice(0, o.topN || st.s.topN || 20), day = t => Math.floor(t / 86400), fx = 50, idx = {};
+  let d0 = Infinity, d1 = -Infinity;
+  syms.forEach(s => { idx[s] = {}; data[s].forEach((c, i) => { const d = day(c.time); idx[s][d] = i; if (d < d0) d0 = d; if (d > d1) d1 = d; }); });
+  const eq = [], dates = [], from = d0 + (o.warm || 260);
+  let bh = 0, bhN = 0;
+  for (let d = from; d <= d1; d++) {
+    const now = d * 86400e3 + 60e3, prices = {}, closes = {}, trend = {};
+    syms.forEach((s, rank) => {
+      const i = idx[s][d]; if (i == null || i < 260) return; const cs = data[s];
+      prices[s] = cs[i].open; closes[s] = cs[i].close;
+      const w = Bot.trendWant(cs.slice(Math.max(0, i - 400), i), st.s.trendRule);
+      if (w.want != null) trend[s] = { want: w.want, why: w.why, t: now, rank: rank };
+    });
+    Bot.step(st, { prices: prices, fx: fx, sigs: {}, trend: trend }, now);
+    eq.push(Bot.equity(st, closes, fx)); dates.push(d);
+  }
+  let peak = -Infinity, mdd = 0; eq.forEach(v => { if (v > peak) peak = v; mdd = Math.max(mdd, (peak - v) / peak); });
+  const h = st.history, years = eq.length / 365, end = eq[eq.length - 1] || st.initial;
+  const byYear = {}; for (let k = 1; k < eq.length; k++) { const y = new Date(dates[k] * 86400e3).getUTCFullYear(); const r = eq[k] / eq[k - 1]; byYear[y] = (byYear[y] || 1) * r; }
+  Object.keys(byYear).forEach(y => byYear[y] = (byYear[y] - 1) * 100);
+  return { days: eq.length, years: years, end: end, ret: (end / st.initial - 1) * 100, ann: (Math.pow(end / st.initial, 1 / years) - 1) * 100, mdd: mdd * 100, trades: h.length,
+    winRate: h.length ? h.filter(x => x.pnl > 0).length / h.length * 100 : 0, fees: st.totals.fee, byYear: byYear, eq: eq, dates: dates, st: st };
+}
+
 const f = (x, d = 2) => x == null || !isFinite(x) ? '–' : (+x).toFixed(d);
 function line(r, label) {
   return `${(label || r.mode).padEnd(26)} ${f(r.days, 1).padStart(5)}g ${String(r.trades).padStart(5)} işl  getiri %${f(r.ret).padStart(7)}  (al-tut %${f(r.bh).padStart(6)})  kazanma %${f(r.winRate, 0).padStart(3)}  PF ${f(r.pf).padStart(5)}  ort/işl %${f(r.avgNetPct, 3).padStart(7)}  maxDD %${f(r.mdd).padStart(5)}  komisyon ${f(r.fees)}`;
 }
 
-module.exports = { SYMBOLS, MODE_TF, MODE_BARS, loadData, loadCandles, prepare, replay, line, f };
+module.exports = { replayTrend, SYMBOLS, MODE_TF, MODE_BARS, loadData, loadCandles, prepare, replay, line, f };
 
 if (require.main === module) {
   const A = {}; const a = process.argv.slice(2);

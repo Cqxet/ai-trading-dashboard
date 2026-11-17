@@ -125,6 +125,17 @@ Bulgular (30 sembol / ilk 8 / BTC+ETH):
 
 **Sınırlar:** Semboller bugünün büyük listesinden seçildi (hayatta kalma yanlılığı: ölen coinler yok; 2021 sonuçları DOGE gibi aykırı yükselişlerden güçlü etkileniyor). Küçük coinlerde %0,05 kayma iyimser olabilir. Vergi, çekim kısıtı ve piyasa etkisi yok. Geçmiş performans geleceği garanti etmez; yatırım tavsiyesi değildir.
 
+## AI Bot: "Günlük trend" modu (sanal)
+
+AI Bot sekmesinde strateji olarak **Günlük trend (1 g, sanal)** seçilebilir. Yukarıdaki araştırmaya (günlük trend kuralları al-tut ile benzer getiriyi daha küçük maks. düşüşle verdi) dayanır; **kâr garantisi vermez**, gerçek emir göndermez.
+
+- **Kural** (Ayarlar'da `trendRule`): `donchian` (varsayılan: 55 günlük kırılımla gir, 20 günlük dibin altında kapanışla çık), `sma` (kapanış > SMA200) veya `ema` (EMA50 > EMA200). Karar yalnızca **kapanmış** günlük mumlardan verilir; en hacimli 20 sembolde 30 dakikada bir kontrol edilir (günlük mumlar yalnızca günde bir değişir).
+- **Pozisyonlar:** Eşit büyüklükte (portföy / 8), en çok 8 eşzamanlı. Kural trendi bitirene kadar tutulur; **sabit stop/hedef yoktur**. Yalnızca girişten %40 düşüşte "felaket stopu" vardır; bundan sonra kural 0'a dönüp yeniden 1 olana kadar aynı sembole girilmez.
+- **Maliyet:** Diğer modlarla aynı komisyon (%0,1) ve kayma (%0,05); yılda sembol başına ~1–7 işlem olduğundan maliyet baskısı küçük.
+- Bu modda öğrenen hafıza ve devre kesici **uygulanmaz** (kısa vadeli sinyaller için tasarlandı); karar tamamen kuraldır.
+- Replay (`node tools/trend-replay.js 8 3000`, gerçek günlük veri, 7,5 yıl, ilk 8 sembol): Donchian yıllık ~%68 / maks. düşüş ~%67 (126 işlem), SMA yıllık ~%55 / ~%71 (270 işlem, çok sahte sinyal), EMA ~%52 / ~%73 (59 işlem). Bu, araştırmayla aynı örneklem ve aynı önyargılar (hayatta kalma yanlılığı, DOGE gibi aykırı yükselişler) altındadır; yeni bir bağımsız kanıt değildir.
+- Piyasa düşüşteyken kural nakitte kalır (örn. 2026 sonunda taranan sembollerde yükseliş durumu yoktu). Bu bir hata değil, kuralın tasarımıdır; ancak trend modu da düşüş/sahte sinyal dönemlerinde zarar eder (araştırmada 2025–26 negatif).
+
 ## Mimari
 
 ```
@@ -166,6 +177,7 @@ Saf modüller UMD kalıbındadır: tarayıcıda `window.TA / Signals / Backtest 
 ```bash
 cd ai-trading-board
 node --test tests/*.test.js                                  # birim testleri (gösterge, motor, bot, aisim)
+node tests/e2e-bot.js                                        # AI Bot kesintisizlik E2E (kalp atışı, arka plan, takılma onarımı)
 node tests/e2e-bot.js                                        # AI Bot kesintisizlik E2E (kalp atışı, arka plan, takılma onarımı)
 node tests/e2e-bot.js                                        # AI Bot kesintisizlik E2E (kalp atışı, arka plan, takılma onarımı)
 node tests/e2e-bot.js                                        # AI Bot kesintisizlik E2E (kalp atışı, arka plan, takılma onarımı)
