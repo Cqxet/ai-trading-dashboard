@@ -74,6 +74,18 @@ function check(name, ok, info) { results.push({ name, ok: !!ok }); console.log((
   check('11 dk eski kur geçersiz sayılır', stale.fxOk === false);
   check('Kur yenilenince bot devam eder (≤ 20 sn)', await waitFor('App.bot.health().fxOk===true', 20000));
 
+  // 4b) Öğrenen hafıza arayüzü
+  check('Öğrenen hafıza varsayılan AÇIK (onay kutusu işaretli)', await ev("document.getElementById('botAdaptive').checked === true"));
+  check('Hafıza paneli görünüyor', await waitFor("/Öğrenen hafıza:/.test(document.getElementById('botMem').innerText) && /devre kesici/i.test(document.getElementById('botMem').innerText)", 10000), await ev("document.getElementById('botMem').innerText.slice(0,120)"));
+  // sentetik öğrenme: genel beklenti negatif → devre kesici açık görünür
+  await ev("(()=>{const st=App.bot.state();for(let i=0;i<14;i++)Bot.memLearn(st,Bot.featOf({regime:{key:'range'},confidence:60,snap:{rsi:50,atrPct:0.3}},'TESTUSDT',{state:'weak'}),-0.8,Date.now()+i);document.getElementById('botMemReset').onclick;})()");
+  check('Panel 14 işlemden öğrenildiğini ve %-0.80 beklentiyi gösteriyor', await waitFor("/14 işlemden öğrendi/.test(document.getElementById('botMem').innerText) && /%-0[.]80[/]işlem/.test(document.getElementById('botMem').innerText)", 20000), await ev("document.getElementById('botMem').innerText.slice(0,200)"));
+  await ev("(()=>{window.confirm=()=>true;document.getElementById('botMemReset').click()})()");
+  check('Hafıza sıfırlanır', await waitFor("App.bot.state().mem.n===0", 5000));
+  await ev("(()=>{document.getElementById('botAdaptive').checked=false;document.getElementById('botApply').click()})()");
+  check('Hafıza kapatılınca panel bunu söyler', await waitFor("/Öğrenen hafıza kapalı/.test(document.getElementById('botMem').innerText)", 20000));
+  await ev("(()=>{document.getElementById('botAdaptive').checked=true;document.getElementById('botApply').click()})()");
+
   // 5) Durdurunca kilit bırakılır
   await ev("document.getElementById('botToggle').click()");
   check('Bot durdurulunca Web Lock bırakılır', await waitFor('App.bot.health().locked===false', 5000));

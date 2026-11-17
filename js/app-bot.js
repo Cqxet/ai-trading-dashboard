@@ -16,6 +16,7 @@
     st = App.store('bot');
     if (!st || typeof st.cash !== 'number' || !st.s) st = Bot.create();
     st.s = Object.assign({}, Bot.DEFAULTS, st.s);
+    if (!st.mem) st.mem = Bot.newMem();
     if (st.s.mode === 'scalp') Bot.applyMode(st, 'fast');   // eski kayıtlı mod adı
   }
   function save() { App.store('bot', st); }
@@ -106,6 +107,19 @@
       else if (!st.enabled && lockRelease) { lockRelease(); lockRelease = null; }
     } catch (e) {}
   }
+  function memHTML() {
+    var m = st.mem || {}, g = m.b && m.b['g:all'], n = g ? g.n : 0, mean = n ? g.sum / n : 0, S = st.s;
+    if (!S.adaptive) return '<b>Öğrenen hafıza kapalı.</b> Bot yalnızca sinyal kurallarıyla çalışır (geçmiş testlerde bu, maliyet nedeniyle ağır zarar üretti).';
+    var guard = m.guardOn, until = m.pauseUntil > Date.now() ? ' · seri zarar molası ' + Math.ceil((m.pauseUntil - Date.now()) / 60000) + ' dk' : '';
+    var best = [], worst = [];
+    Object.keys(m.b || {}).forEach(function (k) { var b = m.b[k]; if (k === 'g:all' || b.n < S.memMinN) return; var mu = b.sum / b.n; (mu >= 0 ? best : worst).push([k, mu, b.n]); });
+    best.sort(function (a, b) { return b[1] - a[1]; }); worst.sort(function (a, b) { return a[1] - b[1]; });
+    var li = function (a) { return a.slice(0, 3).map(function (x) { return esc(x[0]) + ' %' + x[1].toFixed(2) + ' (n=' + Math.round(x[2]) + ')'; }).join(' · ') || '—'; };
+    return '<b>Öğrenen hafıza:</b> ' + m.n + ' işlemden öğrendi · genel net beklenti <b class="' + (mean >= 0 ? 'up' : 'down') + '">%' + mean.toFixed(2) + '/işlem</b> (etkin n≈' + Math.round(n) + ') · ' +
+      (guard ? '<span class="down">DEVRE KESİCİ AÇIK</span>: yeni işlemler engellendi, yalnızca küçük (×0,3) deneme işlemleri yapılır' : '<span class="up">devre kesici kapalı</span>') + until + ' · engellenen aday: ' + (m.blocked || 0) + '<br>' +
+      '<span class="mut">En iyi bölgeler:</span> ' + li(best) + '<br><span class="mut">En kötü bölgeler:</span> ' + li(worst) +
+      '<br><span class="mut">Bu bir kâr garantisi değil: geçmiş gerçek verideki testlerde sinyallerin maliyet sonrası kalıcı üstünlüğü bulunamadı; hafıza zararı azaltır, işlem yapmamayı öğrenir.</span>';
+  }
   function ago(t) { return t ? Math.round((Date.now() - t) / 1000) + ' sn önce' : 'yok'; }
   function healthHTML() {
     if (!st.enabled) return '';
@@ -139,6 +153,7 @@
     $('botNote').innerHTML = (st.enabled ? '● Bot çalışıyor' : '○ Bot durdu') + ' — yalnızca bu sayfa açıkken işlem yapar. Her işlemde komisyon + kayma + işlem vergisi düşülür; ' +
       (st.s.mode !== 'normal' ? 'Hız modu (' + esc(st.s.mode) + '): en hacimli ' + st.s.topN + ' sembolde ' + st.s.tf + ' sinyaller, ' + st.s.scanSec + ' saniyede bir taranır; ' : 'sinyaller izleme listesi taramasından (' + esc(App.S.scanTf) + ') gelir; ') + 'Maliyetleri (yaklaşık %' + (Bot.costRate(st.s) * 200).toFixed(2) + ' gidiş-dönüş) aşamayan fırsatlar atlanır. Gerçek para/emir yok. Yatırım tavsiyesi değildir; geçmiş performans geleceği garanti etmez.';
     if ($('botHealth')) $('botHealth').innerHTML = healthHTML();
+    if ($('botMem')) $('botMem').innerHTML = memHTML();
     $('botPos').innerHTML = '<table class="t"><thead><tr><th>Sembol</th><th>Miktar</th><th>Giriş $</th><th>Güncel $</th><th>Maliyet ₺</th><th>Değer ₺</th><th>PnL ₺</th><th>Stop</th><th>Hedef</th><th>Açılış</th><th>Gerekçe</th><th></th></tr></thead><tbody>' +
       (st.positions.map(function (p) {
         var px = P[p.sym] || p.entry, v = p.qty * px * (fx || p.entryFx), u = v - p.costTRY;
@@ -171,7 +186,7 @@
     var s = st.s;
     $('botFee').value = +(s.feeRate * 100).toFixed(4); $('botSlip').value = +(s.slipRate * 100).toFixed(4);
     $('botTax').value = +(s.taxRate * 100).toFixed(4); $('botPTax').value = +(s.profitTaxRate * 100).toFixed(2);
-    $('botMode').value = s.mode || 'normal'; $('botConf').value = s.minConf; $('botMaxPos').value = s.maxPos;
+    $('botAdaptive').checked = !!s.adaptive; $('botMode').value = s.mode || 'normal'; $('botConf').value = s.minConf; $('botMaxPos').value = s.maxPos;
   }
 
   App.bot = {
@@ -181,6 +196,7 @@
         st.enabled = !st.enabled; save(); syncLock(); render(true);
         App.toast(st.enabled ? 'AI Bot başlatıldı (sanal, TL)' : 'AI Bot durduruldu', 'ok');
       };
+      $('botMemReset').onclick = function () { if (!confirm('Öğrenilen hafıza (kazanç/kayıp istatistikleri ve devre kesici) sıfırlansın mı? Portföy ve işlemler korunur.')) return; st.mem = Bot.newMem(); save(); render(true); App.toast('Hafıza sıfırlandı', 'ok'); };
       $('botReset').onclick = function () {
         if (!confirm('Bot portföyü sıfırlansın mı? Tüm pozisyonlar ve geçmiş silinir; bakiye 100 TL olur.')) return;
         var s = st.s; st = Bot.create(s); st.cash = st.initial = s.initialTRY; save(); syncLock(); render(true); App.toast('Bot portföyü sıfırlandı', 'ok');
@@ -190,6 +206,7 @@
         var fee = v('botFee') / 100, slip = v('botSlip') / 100, tax = v('botTax') / 100, ptax = v('botPTax') / 100, conf = v('botConf'), mp = Math.round(v('botMaxPos'));
         if (![fee, slip, tax, ptax].every(function (x) { return x >= 0 && x < 0.5; }) || !(conf >= 0 && conf <= 100) || !(mp >= 1 && mp <= 10)) { App.toast('Geçersiz ayar değeri', 'bad'); return; }
         var mode = $('botMode').value; if (mode !== s.mode) { Bot.applyMode(st, mode); conf = s.minConf; mp = s.maxPos; $('botConf').value = conf; $('botMaxPos').value = mp; }
+        s.adaptive = $('botAdaptive').checked; s.mktFilter = s.adaptive;
         s.feeRate = fee; s.slipRate = slip; s.taxRate = tax; s.profitTaxRate = ptax; s.minConf = conf; s.maxPos = mp;
         save(); App.toast('Ayarlar uygulandı', 'ok');
       };

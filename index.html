@@ -234,8 +234,11 @@
         <label class="f">Kâr vergisi %<input class="inp" id="botPTax" type="number" step="0.1"></label>
         <label class="f">Min. sinyal güveni<input class="inp" id="botConf" type="number" step="1"></label>
         <label class="f">Maks. pozisyon<input class="inp" id="botMaxPos" type="number" step="1"></label>
+        <label class="chk"><input type="checkbox" id="botAdaptive"> Öğrenen hafıza + piyasa filtresi (önerilir)</label>
         <button class="btn pri" id="botApply">Ayarları uygula</button>
       </div>
+      <div class="note" id="botMem"></div>
+      <div><button class="btn sm" id="botMemReset" style="margin:0 12px 10px">Hafızayı sıfırla</button></div>
       <div class="note">Oranlar tahminidir; kendi borsanıza ve güncel vergi mevzuatına göre değiştirin. Ayar değişikliği yalnızca yeni işlemleri etkiler.</div>
     </section>
     <section class="panel c8"><div class="ph"><h2>Portföy değeri (TL)</h2></div><div class="eqchart" id="botChart"></div></section>

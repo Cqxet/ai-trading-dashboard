@@ -81,6 +81,35 @@ Bot, tarayıcı sekmesi arka plana alınsa da takılmadan sürmesi için şunlar
 
 Sınırlar: bilgisayar uyursa veya tarayıcı kapanırsa bot durur (yalnızca bu sayfa açıkken çalışır). "Arka planda aksamaz" iddiası 20 sn'lik küçültülmüş-pencere testiyle doğrulandı; Chrome'un 5 dk sonra devreye giren yoğun kısıtlaması ise bu testte yeniden üretilmedi, Worker'ın bundan etkilenmediği Chrome'un belgelenmiş davranışına dayanır.
 
+## AI Bot: öğrenen hafıza ve devre kesici (dürüst sonuçlar)
+
+**Önemli:** Sinyal motoru (RSI/MACD/EMA/Bollinger skoru) gerçek geçmiş verilerde, bot maliyetleri (komisyon %0,1 + kayma %0,05, her yönde) düşüldükten sonra **kalıcı bir üstünlük göstermedi**. 20 sembol, 5 hız modu, 1 dk ile 1 sa arası ve ~5-250 günlük gerçek Binance verisinde (`tools/botreplay.js`) eski bot, işlemlerinin tamamında ortalama negatif net getiri üretti; kovalara ayırdığımızda (rejim, güven, RSI, piyasa durumu) pozitif ortalamalı kararlı bir bölge bulunamadı. Son 100 günde "çalışıyor" görünen iki ek strateji (aşırı satım dönüşü, Donchian kırılımı) önceki 150 günde (piyasa −%17,6) çöktü: o başarı yükselen piyasanın etkisiydi (`tools/research-edge.js`).
+
+Bu yüzden bota kâr vaat eden bir şey değil, **zararı sınırlayan** bir katman eklendi (maliyet/ayar oranlarına dokunulmadan, "Öğrenen hafıza" onay kutusuyla kapatılabilir):
+
+- **Öğrenen hafıza:** Her kapanan işlemin maliyet sonrası net getirisi (rejim, güven, RSI, oynaklık, sembol, piyasa durumu kovalarına) yazılır; eski kanıt üssel olarak unutulur (`memDecay`). Ortalaması negatif olan bölgelere yeni giriş açılmaz, pozitif kanıtlı bölgelerde pozisyon ×1,25 olur.
+- **Devre kesici:** Tüm işlemlerin birleşik beklentisi negatifse bot yeni giriş açmaz ve yalnızca küçük (×0,3) deneme işlemleri yapar; kaybeden her deneme sonraki deneme aralığını ikiye katlar (en çok 32×), kazanan sıfırlar. Piyasa lehine dönerse beklenti toparlanır ve bot yavaşça geri açılır.
+- **Piyasa genişliği filtresi:** Sinyal verisi olan sembollerin %40'ından azı yükseliş eğilimindeyse giriş yok.
+- **Seri zarar molası:** 4 üst üste zarardan sonra 15 dk × fazla zarar kadar mola.
+- Bot sekmesindeki panel, hafızanın ne öğrendiğini, devre kesicinin durumunu ve en iyi/en kötü bölgeleri gösterir. Hafıza `localStorage`'da saklanır; "Hafızayı sıfırla" ile silinir.
+
+**Gerçek geçmiş veride etki** (20 sembol, başlangıç sermayesi büyük tutulup 10 TL asgari emir tabanı etkisi kaldırıldı; getiri %):
+
+| Veri | Eski bot | Akıllı katman | Piyasa (al-tut) |
+|---|---|---|---|
+| 1 sa, ~100 gün | −68,1 | +6,0 | +8,5 |
+| 1 sa, ~250 gün | −94,6 | −8,6 | – |
+| 15 dk, ~62 gün | −97,6 | −1,3 | −20,7 |
+| 5 dk, ~28 gün | −76,5 | −2,7 | −28,2 |
+| 3 dk, ~12 gün | −29,7 | −0,8 | −21,1 |
+| 1 dk, ~5 gün | −4,2 | −0,1 | −8,8 |
+
+Ayar seçiminde hiç kullanılmayan 10 sembolde (`tools/oos-bot.js`): eski bot −%60…−%96, akıllı katman −%1,4…−%12,8.
+
+**Bu ne demek, ne demek değil:** Zarar çok büyük ölçüde azalıyor; ama bunun büyük kısmı bota *işlem yapmamayı* öğretmekten geliyor (işlem sayısı ~10-30 kat düşüyor). Hiçbir veri kümesinde istikrarlı kâr çıkmadı; +%6 sonuç, piyasanın yükseldiği döneme denk geliyor ve tek başına kanıt sayılmaz. Gerçek parayla kullanmayın. Replay mum içi sırayı muhafazakâr (önce düşük, sonra yüksek, sonra kapanış) varsayar, canlı tick akışından farklı olabilir; kayma/likidite küçük hacimli sembollerde daha kötü olabilir.
+
+Araçlar: `tools/botreplay.js` (canlıyla aynı `Bot.step` mantığıyla gerçek geçmiş mumlar üzerinde tekrar oynatma), `tools/tune-bot.js`, `tools/grid-bot.js`, `tools/oos-bot.js`, `tools/analyze-trades.js`, `tools/research-edge.js`. Önbellek `tools/.cache/` altında tutulur (git'e girmez).
+
 ## Mimari
 
 ```
@@ -122,6 +151,7 @@ Saf modüller UMD kalıbındadır: tarayıcıda `window.TA / Signals / Backtest 
 ```bash
 cd ai-trading-board
 node --test tests/*.test.js                                  # birim testleri (gösterge, motor, bot, aisim)
+node tests/e2e-bot.js                                        # AI Bot kesintisizlik E2E (kalp atışı, arka plan, takılma onarımı)
 node tests/e2e-bot.js                                        # AI Bot kesintisizlik E2E (kalp atışı, arka plan, takılma onarımı)
 node tests/e2e-sim.js                                        # AI Simülasyon sekmesi E2E (sahte OpenAI sunucusuyla)
 node tests/live-check.js                                     # canlı API + gerçek veride backtest (internet)

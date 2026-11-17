@@ -29,7 +29,18 @@
     maxHoldH: 48,          // azami tutma süresi
     maxTradesPerHour: 6,
     sigMaxAgeMin: 15,      // sinyal verisi azami yaşı
-    mode: 'normal'
+    mode: 'normal',
+    // ---- Akıllı katman (maliyet ve strateji oranlarından bağımsız; kapatılabilir) ----
+    adaptive: true,        // öğrenen hafıza: geçmiş kazanç/kayıplara bakarak giriş filtreler ve büyüklüğü ayarlar
+    mktFilter: true,       // piyasa genişliği filtresi: genel piyasa düşüşteyken long açma
+    minBreadth: 0.4,       // yükseliş eğiliminde olan sembol oranı bu değerin altındaysa giriş yok
+    memMinN: 8,            // bir kovanın hükmü için asgari işlem sayısı
+    memZ: 0,               // bloklama güveni: ortalama + z*hata < 0 ise kova bloklanır (0: ortalama negatifse engelle)
+    memDecay: 0.97,        // eski kanıtın her yeni işlemde ağırlık çarpanı (yakın geçmişe öncelik)
+    globalGuard: true,     // tüm işlemlerin birleşik (unutmalı) ortalaması < 0 ise hiçbir kova girişi açamaz; yalnızca deneme işlemi
+    memRequire: false,     // true: pozitif kanıt olmayan bölgede işlem açma (nakitte kal); yalnızca küçük deneme işlemleriyle öğren
+    probeMin: 240,         // bloklu durumdayken en fazla bu kadar dakikada bir küçük (×0,3) deneme işlemi: rejim değişimini fark etmek için
+    streakPause: 4         // üst üste bu kadar zarardan sonra giriş molası (dk = 15 x fazla zarar)
   };
 
   // Hız kademeleri: her seviyede sinyal zaman dilimi küçülür, tarama sıklaşır, eşikler gevşer,
@@ -42,19 +53,78 @@
     extreme:  { mode: 'extreme',  minConf: 25, minRR: 1.0, minNetGain: 0.002,  maxPos: 6, cooldownMin: 2,  maxHoldH: 0.75, maxTradesPerHour: 80,  sigMaxAgeMin: 1.5, tf: '3m',  scanSec: 12, topN: 30, buyTh: 10, atrStop: 0.9, atrTarget: 1.3 },
     super:    { mode: 'super',    minConf: 20, minRR: 1.0, minNetGain: 0.0015, maxPos: 8, cooldownMin: 1,  maxHoldH: 0.33, maxTradesPerHour: 150, sigMaxAgeMin: 1,   tf: '1m',  scanSec: 8,  topN: 30, buyTh: 8,  atrStop: 0.8, atrTarget: 1.1 }
   };
+  /* =================== ÖĞRENEN HAFIZA ===================
+   * Her kapanan işlemin net getirisi (%, maliyet sonrası) özellik kovalarına yazılır; eski kanıt üssel olarak unutulur.
+   * Giriş anında aday, kovaların istatistiğine göre geçirilir/bloklanır ve büyüklüğü ölçeklenir.
+   * Az veriyle karar verilmez (memMinN); bloklu kovalar belirli olasılıkla yeniden denenir (keşif). */
+  function bucket(x, cuts) { for (var i = 0; i < cuts.length; i++) if (x < cuts[i]) return i; return cuts.length; }
+  function featOf(g, sym, mk) {
+    var sn = g.snap || {};
+    return { reg: g.regime ? g.regime.key : 'na', conf: bucket(g.confidence, [35, 50, 65, 80]), rsi: sn.rsi == null ? 'na' : bucket(sn.rsi, [35, 50, 65]),
+      vol: sn.atrPct == null ? 'na' : bucket(sn.atrPct, [0.15, 0.4, 1]), sym: sym, mkt: mk ? mk.state : 'na' };
+  }
+  function keysOf(f) { return ['g:all', 'r:' + f.reg + '|c:' + f.conf, 's:' + f.sym, 'r:' + f.reg + '|rsi:' + f.rsi, 'm:' + f.mkt + '|r:' + f.reg, 'v:' + f.vol + '|c:' + f.conf]; }
+  function newMem() { return { v: 1, n: 0, b: {}, streak: 0, pauseUntil: 0, blocked: 0, passed: 0 }; }
+  function stat(b) { var n = b.n, m = n ? b.sum / n : 0, v = n > 1 ? Math.max(0, b.sq / n - m * m) : 0.25; return { n: n, mean: m, se: Math.sqrt(v / Math.max(1, n)) }; }
+  function hash01(str) { var h = 2166136261; for (var i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return ((h >>> 0) % 100000) / 100000; }
+  /** Aday işlem için karar: {ok, mult, why}. */
+  function memCheck(st, f, sym, now) {
+    var s = st.s, m = st.mem || (st.mem = newMem());
+    if (m.pauseUntil > now) return { ok: false, mult: 1, why: 'mola' };
+    var worst = null, best = null, gl = null;
+    if (s.globalGuard) { var gb = m.b['g:all']; if (gb && gb.n >= s.memMinN) { var gt = stat(gb); if (gt.mean + s.memZ * gt.se < 0) gl = { mean: gt.mean, n: gt.n }; } }
+    if (gl) {
+      if (now - (m.lastProbe || 0) >= s.probeMin * 60e3 * (m.probeK || 1)) { m.lastProbe = now; return { ok: true, mult: 0.3, probe: true, why: 'deneme (genel beklenti %' + gl.mean.toFixed(2) + ')' }; }
+      return { ok: false, mult: 1, why: 'hafıza: genel beklenti %' + gl.mean.toFixed(2) + ' (n=' + Math.round(gl.n) + ')' };
+    }
+    keysOf(f).forEach(function (k) {
+      var b = m.b[k]; if (!b || b.n < s.memMinN) return; var t = stat(b);
+      var hi = t.mean + s.memZ * t.se, lo = t.mean - 0.5 * t.se;
+      if (hi < 0 && (!worst || hi < worst.hi)) worst = { k: k, hi: hi, mean: t.mean, n: t.n };
+      if (lo > 0 && (!best || lo > best.lo)) best = { k: k, lo: lo, mean: t.mean, n: t.n };
+    });
+    if (worst) {
+      if (now - (m.lastProbe || 0) >= s.probeMin * 60e3 * (m.probeK || 1)) { m.lastProbe = now; return { ok: true, mult: 0.3, probe: true, why: 'deneme ' + worst.k }; }
+      return { ok: false, mult: 1, why: 'hafıza: ' + worst.k + ' ort %' + worst.mean.toFixed(2) + ' (n=' + worst.n + ')' };
+    }
+    if (!best && s.memRequire) {
+      if (now - (m.lastProbe || 0) >= s.probeMin * 60e3 * (m.probeK || 1)) { m.lastProbe = now; return { ok: true, mult: 0.3, probe: true, why: 'deneme (kanıt yok)' }; }
+      return { ok: false, mult: 1, why: 'hafıza: pozitif kanıt yok' };
+    }
+    return { ok: true, mult: best ? 1.25 : 1, why: best ? 'hafıza+ ' + best.k : '' };
+  }
+  /** Kapanan işlemden öğren. retPct: maliyet sonrası net getiri (%). */
+  function memLearn(st, f, retPct, now) {
+    var s = st.s, m = st.mem || (st.mem = newMem()); if (!f) return;
+    keysOf(f).forEach(function (k) {
+      var b = m.b[k] || (m.b[k] = { n: 0, sum: 0, sq: 0 });
+      b.n = b.n * s.memDecay + 1; b.sum = b.sum * s.memDecay + retPct; b.sq = b.sq * s.memDecay + retPct * retPct;
+    });
+    m.n++;
+    if (f.probe) m.probeK = retPct < 0 ? Math.min(32, (m.probeK || 1) * 2) : 1;   // kaybeden deneme aralığı büyütür, kazanan sıfırlar
+    if (retPct < 0) { m.streak++; if (m.streak >= s.streakPause) m.pauseUntil = now + (m.streak - s.streakPause + 1) * 15 * 60e3; } else m.streak = 0;
+  }
+  /** Piyasa genişliği: sinyal verisi olan sembollerden yükseliş eğiliminde (EMA20>EMA50, fiyat>EMA50) olanların oranı. */
+  function marketState(sigs) {
+    var n = 0, up = 0;
+    Object.keys(sigs || {}).forEach(function (k) { var g = sigs[k] && sigs[k].g, sn = g && g.snap; if (!sn || sn.ema20 == null || sn.ema50 == null) return; n++; if (sn.ema20 > sn.ema50 && g.price > sn.ema50) up++; });
+    var b = n >= 5 ? up / n : null;
+    return { breadth: b, n: n, state: b == null ? 'na' : b < 0.25 ? 'bear' : b < 0.5 ? 'weak' : b < 0.75 ? 'ok' : 'bull' };
+  }
+
   function applyMode(st, mode) { Object.assign(st.s, PRESETS[mode] || PRESETS.normal); }
 
   function create(opts) {
     var s = Object.assign({}, DEFAULTS, opts || {});
     return { s: s, enabled: false, initial: s.initialTRY, cash: s.initialTRY, positions: [], history: [], equityLog: [], log: [],
-      lastExit: {}, tradeTimes: [], seq: 1, totals: { fee: 0, tax: 0, profitTax: 0 } };
+      lastExit: {}, tradeTimes: [], seq: 1, totals: { fee: 0, tax: 0, profitTax: 0 }, mem: newMem() };
   }
   function costRate(s) { return s.feeRate + s.slipRate + s.taxRate; }
 
   function note(st, now, text) { st.log.unshift({ t: now, text: text }); if (st.log.length > 200) st.log.pop(); }
 
   /** Alış: invest TL harcar (maliyetler dahil). */
-  function buy(st, sym, px, fx, invest, stop, target, now, why) {
+  function buy(st, sym, px, fx, invest, stop, target, now, why, feat) {
     var s = st.s;
     if (!(px > 0 && fx > 0 && invest > 0) || invest > st.cash + 1e-9) return null;
     var notional = invest / (1 + s.feeRate + s.taxRate);
@@ -62,7 +132,7 @@
     var qty = notional / (fillPx * fx);
     var fee = notional * s.feeRate, tax = notional * s.taxRate;
     st.cash -= invest; st.totals.fee += fee; st.totals.tax += tax;
-    var p = { id: st.seq++, sym: sym, qty: qty, entry: fillPx, entryFx: fx, costTRY: invest, stop: stop, target: target, peak: fillPx, openedAt: now, why: why || '' };
+    var p = { id: st.seq++, sym: sym, qty: qty, entry: fillPx, entryFx: fx, costTRY: invest, stop: stop, target: target, peak: fillPx, openedAt: now, why: why || '', feat: feat || null };
     st.positions.push(p); st.tradeTimes.push(now);
     return p;
   }
@@ -79,8 +149,9 @@
     st.cash += proceeds - ptax;
     st.totals.fee += fee; st.totals.tax += tax; st.totals.profitTax += ptax;
     var rec = { id: p.id, sym: p.sym, qty: p.qty, entry: p.entry, exit: px * (1 - s.slipRate), costTRY: p.costTRY, proceedsTRY: proceeds - ptax,
-      pnl: proceeds - ptax - p.costTRY, fees: fee + tax + ptax, openedAt: p.openedAt, closedAt: now, reason: reason };
-    st.history.unshift(rec); if (st.history.length > 500) st.history.pop();
+      pnl: proceeds - ptax - p.costTRY, fees: fee + tax + ptax, openedAt: p.openedAt, closedAt: now, reason: reason, feat: p.feat || null, mfe: (p.peak / p.entry - 1) * 100 };
+    st.history.unshift(rec); if (st.history.length > (s.histCap || 500)) st.history.pop();
+    if (p.feat) memLearn(st, p.feat, rec.pnl / p.costTRY * 100, now);
     st.positions.splice(k, 1); st.lastExit[p.sym] = now; st.tradeTimes.push(now);
     return rec;
   }
@@ -99,7 +170,7 @@
 
   /** Bir karar turu. ctx = {prices:{sym:USDT}, fx:USDTTRY, sigs:{sym:{g,t}}}. Dönen: olay listesi. */
   function step(st, ctx, now) {
-    var s = st.s, ev = [], fx = ctx.fx, cr = costRate(s);
+    var s = st.s, ev = [], fx = ctx.fx, cr = costRate(s); if (!st.mem) st.mem = newMem();
     if (!(fx > 0)) return ev;
     st.tradeTimes = st.tradeTimes.filter(function (t) { return now - t < 3600e3; });
 
@@ -127,7 +198,8 @@
 
     // 2) Girişler
     if (st.positions.length >= s.maxPos || st.tradeTimes.length >= s.maxTradesPerHour) return ev;
-    var eq = equity(st, ctx.prices, fx), cands = [];
+    var eq = equity(st, ctx.prices, fx), cands = [], mk = marketState(ctx.sigs);
+    if (s.mktFilter && mk.breadth != null && mk.breadth < s.minBreadth) { st.mem.blocked++; return ev; }
     Object.keys(ctx.sigs || {}).forEach(function (sym) {
       var sg = ctx.sigs[sym], g = sg && sg.g, px = ctx.prices[sym];
       if (!g || !(px > 0) || g.side !== 'long') return;
@@ -140,17 +212,19 @@
       if (!(stop > 0 && stop < px)) return;
       var net = target / px - 1 - 2 * cr;                    // gidiş-dönüş maliyet sonrası beklenen kazanç
       if (net < s.minNetGain) return;
-      cands.push({ sym: sym, px: px, g: g, stop: stop, target: target, net: net, rank: g.confidence * Math.abs(g.score) });
+      var feat = featOf(g, sym, mk), mult = 1;
+      if (s.adaptive) { var dec = memCheck(st, feat, sym, now); var gOn = /genel beklenti/.test(dec.why || ''); if (gOn !== !!st.mem.guardOn) { st.mem.guardOn = gOn; note(st, now, gOn ? 'DEVRE KESİCİ AÇIK: ' + dec.why + ' — yalnızca küçük deneme işlemleri' : 'Devre kesici kapandı: genel beklenti toparlandı'); } if (!dec.ok) { st.mem.blocked++; return; } mult = dec.mult; st.mem.passed++; if (dec.probe) feat.probe = true; }
+      cands.push({ sym: sym, px: px, g: g, stop: stop, target: target, net: net, rank: g.confidence * Math.abs(g.score), feat: feat, mult: mult });
     });
     cands.sort(function (a, b) { return b.rank - a.rank; });
     for (var i = 0; i < cands.length && st.positions.length < s.maxPos && st.tradeTimes.length < s.maxTradesPerHour; i++) {
-      var c = cands[i], invest = Math.min(st.cash, eq / s.maxPos);
+      var c = cands[i], invest = Math.min(st.cash, eq / s.maxPos * c.mult);
       if (invest < s.minOrderTRY) break;
-      var p = buy(st, c.sym, c.px, fx, invest, c.stop, c.target, now, 'skor ' + c.g.score + ', güven %' + c.g.confidence + ', R/R ' + c.g.rr.toFixed(1));
+      var p = buy(st, c.sym, c.px, fx, invest, c.stop, c.target, now, 'skor ' + c.g.score + ', güven %' + c.g.confidence + ', R/R ' + c.g.rr.toFixed(1) + (c.mult !== 1 ? ', ×' + c.mult : ''), c.feat);
       if (p) { ev.push({ type: 'buy', position: p }); note(st, now, 'AL ' + c.sym + ' ' + invest.toFixed(2) + ' TL (' + p.why + ')'); }
     }
     return ev;
   }
 
-  return { DEFAULTS: DEFAULTS, PRESETS: PRESETS, applyMode: applyMode, create: create, costRate: costRate, buy: buy, sell: sell, step: step, equity: equity, logEquity: logEquity };
+  return { newMem: newMem, memCheck: memCheck, memLearn: memLearn, marketState: marketState, featOf: featOf, DEFAULTS: DEFAULTS, PRESETS: PRESETS, applyMode: applyMode, create: create, costRate: costRate, buy: buy, sell: sell, step: step, equity: equity, logEquity: logEquity };
 });
