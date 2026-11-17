@@ -110,6 +110,21 @@ Ayar seçiminde hiç kullanılmayan 10 sembolde (`tools/oos-bot.js`): eski bot �
 
 Araçlar: `tools/botreplay.js` (canlıyla aynı `Bot.step` mantığıyla gerçek geçmiş mumlar üzerinde tekrar oynatma), `tools/tune-bot.js`, `tools/grid-bot.js`, `tools/oos-bot.js`, `tools/analyze-trades.js`, `tools/research-edge.js`. Önbellek `tools/.cache/` altında tutulur (git'e girmez).
 
+## Araştırma: günlük trend/momentum (çok yıllık gerçek veri)
+
+`node tools/research-daily.js [sembol sayısı] [mum sayısı]` — klasik, **önceden sabit** kuralları (SMA200, EMA50/200 kesişimi, Donchian 55/20, 90g momentum, haftalık kesitsel momentum) günlük veride, 6,8–8,2 yıl boyunca, bot ile aynı maliyetle (yön başına %0,15) sınar. Karar günün kapanışında, işlem ertesi açılışta; al-tut karşılaştırması maliyetsizdir.
+
+Bulgular (30 sembol / ilk 8 / BTC+ETH):
+
+- **Trend kuralları getiriyi belirgin biçimde artırmıyor; düşüşü azaltıyor.** Maks. düşüş: al-tut %77–81 → trend kuralları %39–67. 2022'de al-tut −%64…−%74 iken trend kuralları −%8…−%25. Yıllık getiri al-tut ile aynı bölgede (BTC+ETH: %37–42 vs %37–41; 30 sembol: %35–43 vs %32).
+- **Sharpe** çoğunlukla biraz yüksek (örn. 1,0–1,4 vs 0,75–1,0) ama %95 güven aralıkları al-tut ile büyük ölçüde örtüşüyor: istatistiksel olarak ayırt edilemiyor.
+- **Kâr garantisi yok:** 2025 ve 2026'da (boğa sonrası) tüm trend kuralları da zarar etti (−%2…−%39). Kural, piyasanın yükselmesine bağlı; bozuk piyasada yalnızca daha az kaybettiriyor.
+- Parametre komşuluğunda sonuçlar kabaca kararlı (SMA 100–250, Donchian 40–100): bıçak sırası değil. Ama "en iyi kural" örnekleme göre değişiyor (30 ve 8 sembolde Donchian, BTC+ETH'de SMA200); tek bir kuralı şampiyon ilan etmek doğru olmaz.
+- Haftalık kesitsel momentum riski azaltmadı (maks. düşüş %84).
+- Bu kuralların işlem sıklığı yılda sembol başına ~1–7 işlem; maliyet baskısı kısa vadeli botun aksine ihmal edilebilir düzeyde.
+
+**Sınırlar:** Semboller bugünün büyük listesinden seçildi (hayatta kalma yanlılığı: ölen coinler yok; 2021 sonuçları DOGE gibi aykırı yükselişlerden güçlü etkileniyor). Küçük coinlerde %0,05 kayma iyimser olabilir. Vergi, çekim kısıtı ve piyasa etkisi yok. Geçmiş performans geleceği garanti etmez; yatırım tavsiyesi değildir.
+
 ## Mimari
 
 ```
@@ -151,6 +166,7 @@ Saf modüller UMD kalıbındadır: tarayıcıda `window.TA / Signals / Backtest 
 ```bash
 cd ai-trading-board
 node --test tests/*.test.js                                  # birim testleri (gösterge, motor, bot, aisim)
+node tests/e2e-bot.js                                        # AI Bot kesintisizlik E2E (kalp atışı, arka plan, takılma onarımı)
 node tests/e2e-bot.js                                        # AI Bot kesintisizlik E2E (kalp atışı, arka plan, takılma onarımı)
 node tests/e2e-bot.js                                        # AI Bot kesintisizlik E2E (kalp atışı, arka plan, takılma onarımı)
 node tests/e2e-sim.js                                        # AI Simülasyon sekmesi E2E (sahte OpenAI sunucusuyla)
