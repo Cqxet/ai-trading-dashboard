@@ -46,7 +46,7 @@ const fake = http.createServer((req, res) => {
   check('Sekme düğmesi var', await ev("!!document.querySelector('#tabs [data-v=sim]')"));
 
   // 1) Bağlantı testi: CORS ön kontrolü + model listesi
-  await ev(`(()=>{const u=document.getElementById('llmUrl');u.value='http://127.0.0.1:${fport}/v1';document.getElementById('llmKey').value='sk-test-123';document.getElementById('llmTest').click()})()`);
+  await ev(`(()=>{const u=document.getElementById('llmUrl');u.value='http://127.0.0.1:${fport}/v1';document.getElementById('llmKey').value='sk-test-123';document.getElementById('llmKey').dispatchEvent(new Event('input'));document.getElementById('llmTest').click()})()`);
   check('Bağlantı testi başarılı + modeller listelendi', await waitFor("/bağlandı · 2 model/.test(document.getElementById('llmStatus').textContent)"), await ev("document.getElementById('llmStatus').textContent"));
   check('Model otomatik dolduruldu', await ev("document.getElementById('llmModel').value==='combo/fake-1'"));
   check('Tarayıcı Authorization başlığını gönderdi (preflight geçti)', lastAuth === null ? true : true); // models çağrısı: aşağıda chat ile doğrulanır

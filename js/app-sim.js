@@ -13,7 +13,8 @@
 
   function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
   function cfg() { return { baseUrl: $('llmUrl').value.trim(), apiKey: $('llmKey').value.trim(), model: $('llmModel').value.trim(), maxTokens: 1500 }; }
-  function saveCfg() { App.store('llm', { url: $('llmUrl').value.trim(), model: $('llmModel').value.trim(), key: $('llmKey').value.trim() }); }
+  function keyState() { var k = $('llmKey').value.trim(); $('llmKeyState').textContent = k ? '✓ kayıtlı (' + k.length + ' karakter)' : '(girilmedi)'; }
+  function saveCfg() { keyState(); App.store('llm', { url: $('llmUrl').value.trim(), model: $('llmModel').value.trim(), key: $('llmKey').value.trim() }); }
   function f(x, d) { return x == null || !isFinite(x) ? '–' : (+x).toFixed(d == null ? 2 : d); }
   function netHint(e) {
     var m = String(e && e.message || e);
@@ -124,6 +125,9 @@
       if (saved.anon != null) $('simAnon').checked = saved.anon;
       if (l.url) $('llmUrl').value = l.url; if (l.model) $('llmModel').value = l.model; if (l.key) $('llmKey').value = l.key;
       $('llmTest').onclick = testConn; $('simRun').onclick = run;
+      $('llmEye').onclick = function () { var i = $('llmKey'); i.type = i.type === 'password' ? 'text' : 'password'; };
+      $('llmKeyDel').onclick = function () { $('llmKey').value = ''; saveCfg(); $('llmStatus').textContent = 'anahtar silindi'; $('llmStatus').className = 'mut'; };
+      $('llmKey').oninput = saveCfg; keyState();
       $('simStop').onclick = function () { if (ctl) ctl.abort(); $('simStop').disabled = true; };
       $('simOut').innerHTML = '<div class="note">Bağlantıyı test edin, ardından "Simülasyonu başlat". İlk deneme için küçük başlayın: 1000 mum, en fazla 60 LLM çağrısı. Karar verici "Kural" seçilirse LLM kullanılmaz (referans çalıştırma).</div>';
     }

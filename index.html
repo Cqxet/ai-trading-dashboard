@@ -161,12 +161,17 @@
 <section class="view" id="v-sim">
   <section class="panel">
     <div class="ph"><h2>AI Simülasyon · LLM karar verici (9router / OpenAI uyumlu)</h2></div>
+    <div class="note" style="border-left:3px solid var(--acc);padding-left:10px">
+      <b>1 · Bağlantı (9router)</b> — 9router'ı kendi bilgisayarınızda çalıştırın (<code>9router</code>), panelden (<a href="http://localhost:20128/dashboard" target="_blank" rel="noopener">localhost:20128/dashboard</a>) API anahtarını kopyalayıp aşağıya yapıştırın. Anahtar yalnızca bu tarayıcıda saklanır ve yalnızca aşağıdaki Base URL'ye gönderilir.
+    </div>
     <div class="form">
       <label class="f">Base URL<input class="inp" id="llmUrl" value="http://localhost:20128/v1" autocomplete="off"></label>
+      <label class="f">API anahtarı <span id="llmKeyState" class="mut"></span>
+        <span style="display:flex;gap:4px"><input class="inp" id="llmKey" type="password" placeholder="9router API anahtarını buraya yapıştırın" autocomplete="off" style="flex:1"><button class="btn sm" id="llmEye" type="button" title="Göster / gizle">👁</button><button class="btn sm" id="llmKeyDel" type="button" title="Kayıtlı anahtarı sil">Sil</button></span></label>
       <label class="f">Model / combo<input class="inp" id="llmModel" list="llmModels" placeholder="Bağlantıyı test edince listelenir" autocomplete="off"><datalist id="llmModels"></datalist></label>
-      <label class="f">API anahtarı<input class="inp" id="llmKey" type="password" placeholder="9router panelindeki anahtar" autocomplete="off"></label>
-      <button class="btn" id="llmTest">Bağlantıyı test et</button><span id="llmStatus" class="mut"></span>
+      <button class="btn pri" id="llmTest">Kaydet ve bağlantıyı test et</button><span id="llmStatus" class="mut"></span>
     </div>
+    <div class="note"><b>2 · Simülasyon</b></div>
     <div class="form">
       <label class="f">Karar verici<select class="inp" id="simMode"><option value="llm" selected>LLM (9router)</option><option value="rule">Kural (referans, LLM yok)</option></select></label>
       <label class="f">Sembol<select class="inp" id="simSym"></select></label>
