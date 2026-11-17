@@ -69,6 +69,18 @@ node tools/run-sim.js --dry-run          # LLM'siz kural karar vericisiyle denem
 2. LLM'ler eğitim verisinden geçmiş piyasayı hatırlıyor olabilir; anonimleştirme riski azaltır, dışlamaz. Asıl güvenilir sınama, simülasyonu modelin eğitiminden sonraki (canlıya yakın) veriyle ve ileriye doğru tekrarlamaktır.
 3. Gerçek 9router/LLM yanıtlarıyla başarılı bir uçtan uca çalıştırma bu depoda henüz doğrulanmadı; testler OpenAI uyumlu **sahte** bir sunucuyla yapıldı (istemci, CORS ön kontrolü, ayrıştırma, hata/iptal yolları).
 
+## AI Bot: kesintisiz çalışma
+
+Bot, tarayıcı sekmesi arka plana alınsa da takılmadan sürmesi için şunları yapar:
+
+- **Kalp atışı:** Bot döngüsü bir Web Worker zamanlayıcısıyla (1 sn) tetiklenir; ana iş parçacığındaki `setInterval`'ler arka plan sekmelerde kısılırken Worker zamanlayıcıları kısılmaz. Worker açılamazsa `setInterval`'e düşer.
+- **Web Lock:** Bot açıkken bir Web Lock tutulur; Chrome kilit tutan sekmeyi arka planda dondurmaz.
+- **Kendini onaran tarama:** Sinyal taraması zaman aşımı korumalıdır (en az 20 sn); asılı istek bayrağı sonsuza dek kilitlemez. Sinyaller geldikçe yazılır, tarama bitmese de kısmi sonuçlar kullanılır.
+- **Kur dayanıklılığı:** USDT/TRY kuru hız sınırı kuyruğunu atlayan doğrudan istekle (iki sunucu) 15 sn'de bir yenilenir ve 10 dk'ya kadar geçerli sayılır (eskiden 2 dk'da bot sessizce duruyordu).
+- **Sağlık satırı:** Bot sekmesinde kalp atışı, son tarama, kur yaşı ve fiyat akışı durumu görünür; sorun varsa kırmızı uyarı ve sebebi yazar.
+
+Sınırlar: bilgisayar uyursa veya tarayıcı kapanırsa bot durur (yalnızca bu sayfa açıkken çalışır). "Arka planda aksamaz" iddiası 20 sn'lik küçültülmüş-pencere testiyle doğrulandı; Chrome'un 5 dk sonra devreye giren yoğun kısıtlaması ise bu testte yeniden üretilmedi, Worker'ın bundan etkilenmediği Chrome'un belgelenmiş davranışına dayanır.
+
 ## Mimari
 
 ```
@@ -110,6 +122,7 @@ Saf modüller UMD kalıbındadır: tarayıcıda `window.TA / Signals / Backtest 
 ```bash
 cd ai-trading-board
 node --test tests/*.test.js                                  # birim testleri (gösterge, motor, bot, aisim)
+node tests/e2e-bot.js                                        # AI Bot kesintisizlik E2E (kalp atışı, arka plan, takılma onarımı)
 node tests/e2e-sim.js                                        # AI Simülasyon sekmesi E2E (sahte OpenAI sunucusuyla)
 node tests/live-check.js                                     # canlı API + gerçek veride backtest (internet)
 node tests/e2e-chrome.js                                     # headless Chrome ile uçtan uca (Chrome/Edge kurulu olmalı)

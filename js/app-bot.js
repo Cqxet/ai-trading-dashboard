@@ -8,6 +8,9 @@
   var App = root.App, U = root.Util, Bot = root.Bot;
   var $ = App.$, fmt = U.fmt, esc = U.esc;
   var st = null, fx = 0, fxAt = 0, chart = null, series = null, lastStep = 0, lastRender = 0;
+  // Sağlık / kalp atışı (takılma tespiti ve kendini onarma)
+  var H = { hbKind: 'yok', hbAt: 0, beats: 0, scanAt: 0, scanN: 0, scanMs: 0, scans: 0, scanResets: 0, reason: '', fxFails: 0, hiddenBeats: 0 };
+  var FX_MAX_AGE = 600000;   // kur 10 dk'ya kadar geçerli (USDT/TRY yavaş değişir); eskiden 2 dk idi ve bot sessizce duruyordu
 
   function load() {
     st = App.store('bot');
@@ -22,33 +25,48 @@
   function tl(v, n) { return fmt(v, n == null ? 2 : n) + ' ₺'; }
 
   async function loadFx() {
-    try {
-      var r = await root.Data.get('/api/v3/ticker/price?symbol=USDTTRY');
-      if (+r.price > 0) { fx = +r.price; fxAt = Date.now(); }
-    } catch (e) { /* eski kur kalır; 2 dk'dan eskiyse bot işlem yapmaz */ }
+    // Tarama istekleri kuyruğu doldurduğunda kur isteği arkada beklemesin: kuyruğu atlayan doğrudan çağrı
+    var hosts = ['https://data-api.binance.vision', 'https://api.binance.com'];
+    for (var i = 0; i < hosts.length; i++) {
+      try {
+        var r = await root.Data.external(hosts[i] + '/api/v3/ticker/price?symbol=USDTTRY', 8000);
+        if (+r.price > 0) { fx = +r.price; fxAt = Date.now(); H.fxFails = 0; return; }
+      } catch (e) { /* diğer sunucu / sonraki tur */ }
+    }
+    H.fxFails++;   // eski kur kalır; FX_MAX_AGE'den eskiyse bot işlem yapmaz
   }
-  function fxOk() { return fx > 0 && Date.now() - fxAt < 120000; }
+  function fxOk() { return fx > 0 && Date.now() - fxAt < FX_MAX_AGE; }
 
   // Hızlı mod: en hacimli 20 sembolde 15 dk mumlardan düşük eşikli sinyal (30 sn'de bir)
-  var scalpSigs = {}, scalping = false, lastScalp = 0;
+  var scalpSigs = {}, scalping = false, lastScalp = 0, scanStart = 0, scanGen = 0;
   async function scalpScan() {
-    if (scalping || !st.enabled || st.s.mode === 'normal') return;
-    scalping = true; lastScalp = Date.now();
-    var S = st.s, top = App.SYMBOLS.filter(function (s) { return App.tick[s]; }).sort(function (a, b) { return App.tick[b].qvol - App.tick[a].qvol; }).slice(0, S.topN || 20);
-    await Promise.all(top.map(async function (s) {
+    if (!st.enabled || st.s.mode === 'normal') return;
+    var S = st.s, limitMs = Math.max(20000, (S.scanSec || 30) * 2000);
+    // Önceki tarama hâlâ sürüyorsa bekle; ama limitMs'yi aştıysa takılı sayıp bırak (bayrak kendini onarır)
+    if (scalping && Date.now() - scanStart < limitMs) return;
+    if (scalping) H.scanResets++;
+    scalping = true; scanStart = lastScalp = Date.now(); var gen = ++scanGen, ok = 0;
+    var top = App.SYMBOLS.filter(function (s) { return App.tick[s]; }).sort(function (a, b) { return App.tick[b].qvol - App.tick[a].qvol; }).slice(0, S.topN || 20);
+    var all = Promise.all(top.map(async function (s) {
       try {
         var cs = (await root.Data.klines(s, S.tf || '15m', 200, (S.scanSec || 30) * 800)).slice(0, -1);
         var g = root.Signals.analyze(cs, { buyTh: S.buyTh, sellTh: -S.buyTh, atrStop: S.atrStop, atrTarget: S.atrTarget });
-        if (g) scalpSigs[s] = { g: g, t: Date.now() };
+        // Sinyal gelir gelmez yazılır: tarama bitmese bile kısmi sonuçlar kullanılır
+        if (g) { scalpSigs[s] = { g: g, t: Date.now() }; ok++; H.scanAt = Date.now(); }
       } catch (e) { /* sonraki turda */ }
     }));
-    scalping = false;
+    var timer, timeout = new Promise(function (res) { timer = setTimeout(res, limitMs); });
+    await Promise.race([all, timeout]); clearTimeout(timer);
+    H.scanN = ok; H.scanMs = Date.now() - scanStart; H.scans++;
+    if (gen === scanGen) scalping = false;   // daha yeni bir tarama başlamışsa bayrağa dokunma
   }
 
   function run() {
     var now = Date.now();
-    if (!st.enabled || !fxOk() || now - lastStep < 3000) return;
-    lastStep = now;
+    if (!st.enabled) { H.reason = ''; return; }
+    if (!fxOk()) { H.reason = 'USDT/TRY kuru eski (' + (fx ? Math.round((now - fxAt) / 1000) + ' sn' : 'hiç alınamadı') + ')'; return; }
+    if (now - lastStep < 3000) return;
+    lastStep = now; H.reason = '';
     var P = prices(), sigs = {};
     if (st.s.mode !== 'normal') { sigs = scalpSigs; if (now - lastScalp > (st.s.scanSec || 30) * 1000) scalpScan(); }
     else App.SYMBOLS.forEach(function (s) { if (App.sig[s]) sigs[s] = { g: App.sig[s].g, t: App.sig[s].t }; });
@@ -60,6 +78,50 @@
       App.toast('[AI Bot] ' + msg, e.type === 'sell' && e.rec.pnl < 0 ? 'bad' : 'ok', 7000);
     });
     if (ev.length) save();
+  }
+
+  /* ---- Kalp atışı: Web Worker zamanlayıcısı arka plan sekmede kısılmaz (ana iş parçacığı setInterval'leri kısılır) ---- */
+  var hbWorker = null, lastSaveAt = 0, lastNormal = 0, lockRelease = null;
+  function beat() {
+    H.hbAt = Date.now(); H.beats++; if (document.hidden) H.hiddenBeats++;
+    if (!st.enabled) return;
+    run();
+    if (st.s.mode !== 'normal' && Date.now() - lastScalp > (st.s.scanSec || 30) * 1000) scalpScan();   // run() 3 sn kısıtına takılsa da tarama aksamasın
+    if (st.s.mode === 'normal' && document.hidden && Date.now() - lastNormal > 60000) { lastNormal = Date.now(); try { App.refreshSigs(); } catch (e) {} }
+    if (Date.now() - lastSaveAt > 10000) { lastSaveAt = Date.now(); save(); }
+    if (!document.hidden && App.view() === 'bot' && Date.now() - lastRender > 2000) render(false);
+  }
+  function startHeartbeat() {
+    try {
+      var url = URL.createObjectURL(new Blob(['setInterval(function(){postMessage(1)},1000)'], { type: 'text/javascript' }));
+      hbWorker = new Worker(url); hbWorker.onmessage = beat; hbWorker.onerror = function () { fallbackHeartbeat(); };
+      H.hbKind = 'worker';
+    } catch (e) { fallbackHeartbeat(); }
+  }
+  function fallbackHeartbeat() { if (hbWorker) { try { hbWorker.terminate(); } catch (e) {} hbWorker = null; } if (H.hbKind !== 'timer') { H.hbKind = 'timer'; setInterval(beat, 1000); } }
+  /** Bot açıkken Web Lock tutulur: Chrome kilit tutan sekmeyi arka planda dondurmaz. */
+  function syncLock() {
+    try {
+      if (st.enabled && !lockRelease && navigator.locks) navigator.locks.request('atb-bot-alive', function () { return new Promise(function (res) { lockRelease = res; }); });
+      else if (!st.enabled && lockRelease) { lockRelease(); lockRelease = null; }
+    } catch (e) {}
+  }
+  function ago(t) { return t ? Math.round((Date.now() - t) / 1000) + ' sn önce' : 'yok'; }
+  function healthHTML() {
+    if (!st.enabled) return '';
+    var S = st.s, fast = S.mode !== 'normal', now = Date.now(), warn = [];
+    if (now - H.hbAt > 5000) warn.push('kalp atışı durdu');
+    if (fast && H.scanAt && now - H.scanAt > Math.max(45000, (S.scanSec || 30) * 4000)) warn.push('sinyal taraması ' + ago(H.scanAt));
+    if (fast && !H.scanAt && now - lastScalp > 30000) warn.push('henüz sinyal gelmedi');
+    if (!fxOk()) warn.push('kur eski');
+    var ws = root.Data.status().ws.ticker;
+    if (ws !== 'open') warn.push('canlı fiyat akışı ' + ws + ' (REST ile yoklanıyor)');
+    var parts = ['kalp atışı ' + H.hbKind + ' · ' + ago(H.hbAt)];
+    if (fast) parts.push('son sinyal taraması ' + ago(H.scanAt) + ' (' + H.scanN + ' sembol, ' + (H.scanMs / 1000).toFixed(1) + ' sn)');
+    parts.push('kur ' + ago(fxAt));
+    if (document.hidden) parts.push('sekme arka planda — bot çalışmaya devam ediyor');
+    if (H.scanResets) parts.push('takılan tarama ' + H.scanResets + '× otomatik onarıldı');
+    return '<span style="color:var(' + (warn.length ? '--down' : '--up') + ')">' + (warn.length ? '⚠ ' + esc(warn.join(' · ')) : '✓ akış sağlıklı') + '</span> <span class="mut">· ' + esc(parts.join(' · ')) + '</span>';
   }
 
   function render(full) {
@@ -76,6 +138,7 @@
     $('botToggle').className = 'btn sm ' + (st.enabled ? 'sell' : 'buy');
     $('botNote').innerHTML = (st.enabled ? '● Bot çalışıyor' : '○ Bot durdu') + ' — yalnızca bu sayfa açıkken işlem yapar. Her işlemde komisyon + kayma + işlem vergisi düşülür; ' +
       (st.s.mode !== 'normal' ? 'Hız modu (' + esc(st.s.mode) + '): en hacimli ' + st.s.topN + ' sembolde ' + st.s.tf + ' sinyaller, ' + st.s.scanSec + ' saniyede bir taranır; ' : 'sinyaller izleme listesi taramasından (' + esc(App.S.scanTf) + ') gelir; ') + 'Maliyetleri (yaklaşık %' + (Bot.costRate(st.s) * 200).toFixed(2) + ' gidiş-dönüş) aşamayan fırsatlar atlanır. Gerçek para/emir yok. Yatırım tavsiyesi değildir; geçmiş performans geleceği garanti etmez.';
+    if ($('botHealth')) $('botHealth').innerHTML = healthHTML();
     $('botPos').innerHTML = '<table class="t"><thead><tr><th>Sembol</th><th>Miktar</th><th>Giriş $</th><th>Güncel $</th><th>Maliyet ₺</th><th>Değer ₺</th><th>PnL ₺</th><th>Stop</th><th>Hedef</th><th>Açılış</th><th>Gerekçe</th><th></th></tr></thead><tbody>' +
       (st.positions.map(function (p) {
         var px = P[p.sym] || p.entry, v = p.qty * px * (fx || p.entryFx), u = v - p.costTRY;
@@ -113,14 +176,14 @@
 
   App.bot = {
     init: function () {
-      load(); fillForm(); loadFx(); setInterval(loadFx, 20000);
+      load(); fillForm(); loadFx(); setInterval(loadFx, 15000); startHeartbeat(); syncLock();
       $('botToggle').onclick = function () {
-        st.enabled = !st.enabled; save(); render(true);
+        st.enabled = !st.enabled; save(); syncLock(); render(true);
         App.toast(st.enabled ? 'AI Bot başlatıldı (sanal, TL)' : 'AI Bot durduruldu', 'ok');
       };
       $('botReset').onclick = function () {
         if (!confirm('Bot portföyü sıfırlansın mı? Tüm pozisyonlar ve geçmiş silinir; bakiye 100 TL olur.')) return;
-        var s = st.s; st = Bot.create(s); st.cash = st.initial = s.initialTRY; save(); render(true); App.toast('Bot portföyü sıfırlandı', 'ok');
+        var s = st.s; st = Bot.create(s); st.cash = st.initial = s.initialTRY; save(); syncLock(); render(true); App.toast('Bot portföyü sıfırlandı', 'ok');
       };
       $('botApply').onclick = function () {
         var s = st.s, v = function (id) { return +$(id).value; };
@@ -148,6 +211,8 @@
       setInterval(save, 30000);
       root.addEventListener('beforeunload', save);
     },
-    state: function () { return st; }
+    state: function () { return st; },
+    health: function () { return Object.assign({}, H, { fx: fx, fxAt: fxAt, fxOk: fxOk(), scalping: scalping, lastScalp: lastScalp, locked: !!lockRelease, sigs: Object.keys(scalpSigs).length }); },
+    _test: { setFx: function (v, at) { fx = v; fxAt = at; }, scan: scalpScan, scalpSigs: scalpSigs }
   };
 })(typeof self !== 'undefined' ? self : this);
